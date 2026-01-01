@@ -161,16 +161,6 @@ criterion = SupConLoss(temperature=0.1)
 - `tf_efficientnetv2_s`
 - `tf_efficientnetv2_l`
 
-## 工具脚本
-
-### 清理数据目录
-
-清理图片数量过少的类别目录：
-
-```bash
-python scripts/cleanup_low_count_dirs.py --data-root path/to/data --min-images 70 --execute
-```
-
 ## 许可证
 
 本项目由 Aether Sight 组织维护。
