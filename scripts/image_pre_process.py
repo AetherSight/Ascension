@@ -44,4 +44,4 @@ def process_clothing_features(image_path):
     plt.show()
 
 # 使用你的图片路径运行
-process_clothing_features(r'S:\FFXIV_train_test\5.jpg')
+process_clothing_features(r'images/test2.png')

@@ -17,16 +17,25 @@ from loss import SupConLoss
 from augment_images import A2ClothingTransform
 
 
-def train_supcon():
+def train_supcon(
+        data_root: str, 
+        batch_size: int = 16, 
+        target_batch: int = 128, 
+        epochs: int = 50, 
+        warmup_epochs: int = 5, 
+        lr: float = 3e-4, 
+        save_dir: str = "checkpoints"
+    ):
+
     config = {
-        "data_root": "S:\\FFXIV_train_new",
-        "batch_size": 16,
-        "target_batch": 128, 
-        "epochs": 50,
-        "warmup_epochs": 5,
-        "lr": 3e-4,
-        "save_dir": "checkpoints_supcon",
-        "model_name": "tf_efficientnetv2_m",
+        "data_root": data_root,
+        "batch_size": batch_size,
+        "target_batch": target_batch,
+        "epochs": epochs,
+        "warmup_epochs": warmup_epochs,
+        "lr": lr,
+        "save_dir": save_dir,
+        "model_name": "tf_efficientnetv2_m",   
         "temperature": 0.1
     }
 
@@ -104,4 +113,12 @@ def train_supcon():
 
 
 if __name__ == "__main__":
-    train_supcon()
+    train_supcon(
+        data_root="S:\\FFXIV_train_new",
+        batch_size=16,
+        target_batch=128,
+        epochs=50,
+        warmup_epochs=5,
+        lr=3e-4,
+        save_dir="checkpoints_supcon"
+    )

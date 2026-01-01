@@ -108,8 +108,8 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(description='清理训练目录中图片数量过少的类别目录')
-    parser.add_argument('--data-root', type=str, default=r'S:\FFXIV_train_new',
-                        help='数据根目录路径 (默认: S:\\FFXIV_train_new)')
+    parser.add_argument('--data-root', type=str,
+                        help='数据根目录路径')
     parser.add_argument('--min-images', type=int, default=70,
                         help='最少图片数量要求，低于此数量的目录将被删除 (默认: 70)')
     parser.add_argument('--execute', action='store_true',

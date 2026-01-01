@@ -284,7 +284,7 @@ if __name__ == "__main__":
     ]
 
     verify_real_world_image(
-        model_path="checkpoints_supcon/epoch_50_supcon.pth",
+        model_path="checkpoints/epoch_50_supcon.pth",
         gallery_root=r"S:\\FFXIV_train_new", 
         image_paths=test_images,
         top_k=5
