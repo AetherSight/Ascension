@@ -63,26 +63,36 @@ data_root/
 
 ### 训练模型
 
-修改 `train.py` 中的配置参数：
+修改 `train.py` 中的 `train_supcon()` 函数调用参数：
 
 ```python
-config = {
-    "data_root": "path/to/your/data",
-    "batch_size": 16,
-    "target_batch": 128,  # 通过梯度累积达到的有效 batch size
-    "epochs": 50,
-    "warmup_epochs": 5,
-    "lr": 3e-4,
-    "save_dir": "checkpoints_supcon",
-    "model_name": "tf_efficientnetv2_m",  # timm 模型名称
-    "temperature": 0.1  # SupCon loss 温度参数
-}
+if __name__ == "__main__":
+    train_supcon(
+        data_root="path/to/your/data",
+        batch_size=16,
+        target_batch=128,  # 通过梯度累积达到的有效 batch size
+        epochs=50,
+        warmup_epochs=5,
+        lr=3e-4,
+        save_dir="checkpoints"  # 模型保存目录
+    )
 ```
 
 运行训练：
 ```bash
 python train.py
 ```
+
+**参数说明：**
+- `data_root`: 训练数据根目录（必需）
+- `batch_size`: 物理 batch size（默认: 16）
+- `target_batch`: 通过梯度累积达到的有效 batch size（默认: 128）
+- `epochs`: 训练轮数（默认: 50）
+- `warmup_epochs`: 学习率预热轮数（默认: 5）
+- `lr`: 初始学习率（默认: 3e-4）
+- `save_dir`: 模型保存目录（默认: "checkpoints"）
+
+注意：模型名称（`model_name`）和温度参数（`temperature`）在函数内部已设置为 `tf_efficientnetv2_m` 和 `0.1`。
 
 ### 测试和检索
 
