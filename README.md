@@ -2,8 +2,6 @@
 
 一个基于监督对比学习（Supervised Contrastive Learning）的图像识别模型训练框架。
 
-**组织**: Aether Sight
-
 ## 项目简介
 
 Ascension 是一个用于训练图像识别模型的深度学习框架，主要采用 Supervised Contrastive Learning (SupCon) 方法。该项目特别适用于需要学习鲁棒特征表示的图像分类和检索任务，如服装识别、装备识别等场景。
@@ -15,23 +13,6 @@ Ascension 是一个用于训练图像识别模型的深度学习框架，主要�
 - 🔄 **强大的数据增强**: 针对颜色无关特征学习的数据增强策略
 - 📊 **灵活的检索系统**: 支持 gallery-based 图像检索和 Top-K 匹配
 - ⚡ **训练优化**: 支持梯度累积、混合精度训练、学习率调度等优化策略
-
-## 项目结构
-
-```
-.
-├── train.py              # 主训练脚本
-├── model.py              # 模型定义（EmbeddingModel）
-├── dataset.py            # 数据集类（SupConClothingDataset, GalleryDataset）
-├── loss.py               # 损失函数（SupConLoss, ProxyAnchorLoss）
-├── augment_images.py     # 数据增强和图像预处理
-├── test_model.py         # 模型测试和检索脚本
-├── scripts/              # 工具脚本
-│   └── cleanup_low_count_dirs.py  # 清理数据目录工具
-├── pyproject.toml        # 项目配置
-└── requirements.txt      # Python 依赖
-
-```
 
 ## 安装
 
