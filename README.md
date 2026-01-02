@@ -1,52 +1,22 @@
 # Ascension
 
-一个基于监督对比学习（Supervised Contrastive Learning）的图像识别模型训练框架。
+A supervised contrastive learning framework for image recognition model training.
 
-## 项目简介
+## Overview
 
-Ascension 是一个用于训练图像识别模型的深度学习框架，主要采用 Supervised Contrastive Learning (SupCon) 方法。该项目特别适用于需要学习鲁棒特征表示的图像分类和检索任务，如服装识别、装备识别等场景。
+Ascension is a deep learning framework designed for training image recognition models using Supervised Contrastive Learning (SupCon). It is particularly suitable for tasks that require learning robust feature representations, such as clothing recognition, equipment identification, and similar image classification/retrieval scenarios.
 
-## 主要特性
+## Technical Stack
 
-- 🎯 **监督对比学习**: 使用 SupCon Loss 训练，学习更具区分性的特征表示
-- 🚀 **高效模型**: 基于 EfficientNet 系列模型，支持多种预训练 backbone
-- 🔄 **强大的数据增强**: 针对颜色无关特征学习的数据增强策略
-- 📊 **灵活的检索系统**: 支持 gallery-based 图像检索和 Top-K 匹配
-- ⚡ **训练优化**: 支持梯度累积、混合精度训练、学习率调度等优化策略
+- **Learning Method**: Supervised Contrastive Learning (SupCon Loss)
+- **Model Architecture**: EfficientNet series (via `timm` library)
+- **Data Augmentation**: Color-agnostic augmentation strategies using Albumentations
+- **Training Optimizations**: Gradient accumulation, mixed precision training, learning rate scheduling
 
-## 安装
+## Dataset Organization
 
-### 环境要求
+Organize your training data in the following directory structure:
 
-- Python >= 3.13
-- CUDA (推荐，用于 GPU 训练)
-
-### 安装依赖
-
-使用 Poetry（推荐）:
-```bash
-poetry install
-```
-
-或使用 pip:
-```bash
-pip install -r requirements.txt
-```
-
-主要依赖：
-- PyTorch >= 2.7.0
-- torchvision >= 0.22.0
-- timm (用于 EfficientNet 模型)
-- albumentations (用于数据增强)
-- opencv-python
-- numpy
-- tqdm
-
-## 使用方法
-
-### 数据准备
-
-将训练数据组织为以下目录结构：
 ```
 data_root/
 ├── class1/
@@ -59,127 +29,68 @@ data_root/
 └── ...
 ```
 
-每个子目录代表一个类别，包含该类别的所有训练图像。
+Each subdirectory represents a class and contains all training images for that class.
 
-### 训练模型
+## Quick Start
 
-修改 `train.py` 中的 `train_supcon()` 函数调用参数：
+### 1. Install Dependencies
+
+Using Poetry:
+```bash
+poetry install
+```
+
+### 2. Prepare Your Data
+
+Organize your images according to the dataset structure described above.
+
+### 3. Configure Training
+
+Edit `train.py` and modify the `train_supcon()` function call:
 
 ```python
 if __name__ == "__main__":
     train_supcon(
         data_root="path/to/your/data",
         batch_size=16,
-        target_batch=128,  # 通过梯度累积达到的有效 batch size
+        target_batch=128,  # Effective batch size via gradient accumulation
         epochs=50,
         warmup_epochs=5,
         lr=3e-4,
-        save_dir="checkpoints"  # 模型保存目录
+        save_dir="checkpoints"
     )
 ```
 
-运行训练：
+### 4. Start Training
+
 ```bash
 python train.py
 ```
 
-**参数说明：**
-- `data_root`: 训练数据根目录（必需）
-- `batch_size`: 物理 batch size（默认: 16）
-- `target_batch`: 通过梯度累积达到的有效 batch size（默认: 128）
-- `epochs`: 训练轮数（默认: 50）
-- `warmup_epochs`: 学习率预热轮数（默认: 5）
-- `lr`: 初始学习率（默认: 3e-4）
-- `save_dir`: 模型保存目录（默认: "checkpoints"）
+**Key Parameters:**
+- `data_root`: Path to your training data root directory (required)
+- `batch_size`: Physical batch size (default: 16)
+- `target_batch`: Effective batch size via gradient accumulation (default: 128)
+- `epochs`: Number of training epochs (default: 50)
+- `warmup_epochs`: Learning rate warmup epochs (default: 5)
+- `lr`: Initial learning rate (default: 3e-4)
+- `save_dir`: Directory to save checkpoints (default: "checkpoints")
 
-注意：模型名称（`model_name`）和温度参数（`temperature`）在函数内部已设置为 `tf_efficientnetv2_m` 和 `0.1`。
+The model uses `tf_efficientnetv2_m` as the backbone with a temperature parameter of `0.1` for SupCon loss.
 
-### 测试和检索
+## Requirements
 
-使用训练好的模型进行图像检索：
+- Python >= 3.13
+- CUDA (recommended for GPU training)
+- Poetry for dependency management
 
-```python
-from test_model import verify_real_world_image
+Main dependencies are managed via `pyproject.toml`:
+- PyTorch 2.7.0
+- torchvision 0.22.0
+- timm (EfficientNet models)
+- albumentations (data augmentation)
+- opencv-python, numpy, tqdm, matplotlib
 
-verify_real_world_image(
-    model_path="checkpoints_supcon/best_supcon.pth",
-    gallery_root="path/to/gallery/images",
-    image_paths=["path/to/query/image.jpg"],
-    top_k=5
-)
-```
+## License
 
-### 预览数据增强
-
-查看数据增强效果：
-
-```python
-from augment_images import preview_augmentations
-
-preview_augmentations(
-    image_path="path/to/image.jpg",
-    grid_size=(5, 5),
-    output_path="preview_augmentations.jpg",
-    show=True
-)
-```
-
-## 核心组件
-
-### EmbeddingModel
-
-基于 EfficientNet 的特征提取模型，输出归一化的嵌入向量。
-
-```python
-from model import EmbeddingModel
-
-model = EmbeddingModel(model_name="tf_efficientnetv2_m", emb_dim=512)
-```
-
-### SupConLoss
-
-监督对比损失函数，通过拉近同类样本、推远异类样本来学习特征表示。
-
-```python
-from loss import SupConLoss
-
-criterion = SupConLoss(temperature=0.1)
-```
-
-### A2ClothingTransform
-
-针对颜色无关特征学习的数据增强策略，包括：
-- 颜色抖动和通道操作
-- 几何变换（旋转、缩放、裁剪）
-- 局部遮挡
-- 纹理增强
-
-## 配置说明
-
-### 训练参数
-
-- `batch_size`: 物理 batch size
-- `target_batch`: 通过梯度累积达到的有效 batch size
-- `temperature`: SupCon loss 的温度参数，控制相似度分布的锐度
-- `warmup_epochs`: 学习率预热轮数
-- `lr`: 初始学习率
-
-### 模型选择
-
-支持所有 timm 库中的模型，推荐使用：
-- `tf_efficientnetv2_m` (默认)
-- `tf_efficientnetv2_s`
-- `tf_efficientnetv2_l`
-
-## 许可证
-
-本项目由 Aether Sight 组织维护。
-
-## 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 作者
-
-Aether Sight
-
+Maintained by Aether Sight.

@@ -11,10 +11,7 @@ from torch.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
-from dataset import SupConClothingDataset
-from model import EmbeddingModel
-from loss import SupConLoss
-from augment_images import A2ClothingTransform
+from lib import SupConClothingDataset, EmbeddingModel, SupConLoss, ClothingTransform
 
 
 def train_supcon(
@@ -45,7 +42,7 @@ def train_supcon(
     os.makedirs(config["save_dir"], exist_ok=True)
 
     # 1. Loader (Windows 下建议 num_workers=4, 报错改 0)
-    train_ds = SupConClothingDataset(config["data_root"], transform=A2ClothingTransform(train=True))
+    train_ds = SupConClothingDataset(config["data_root"], transform=ClothingTransform(train=True))
     train_loader = DataLoader(train_ds, batch_size=config["batch_size"], shuffle=True, 
                               num_workers=4, pin_memory=True, drop_last=True)
 

@@ -8,13 +8,6 @@ authors = [
 package-mode = false
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = [
-    "opencv-python (>=4.5.0)",
-    "numpy (>=1.21.0)",
-    "albumentations (==1.3.0)",
-    "torch (==2.7.0)",
-    "torchvision (==0.22.0)"
-]
 
 
 [build-system]
@@ -29,5 +22,12 @@ priority = "explicit"
 
 
 [tool.poetry.dependencies]
-torch = {source = "pytorch-cu126"}
-torchvision = {source = "pytorch-cu126"}
+python = ">=3.13"
+torch = {version = "2.7.0", source = "pytorch-cu126"}
+torchvision = {version = "0.22.0", source = "pytorch-cu126"}
+opencv-python = ">=4.5.0"
+numpy = ">=1.21.0"
+albumentations = ">=1.3.0"
+timm = ">=0.9.0"
+tqdm = ">=4.60.0"
+matplotlib = ">=3.3.0"

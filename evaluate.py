@@ -4,10 +4,8 @@ import torch.nn.functional as F
 from tqdm import tqdm
 import cv2
 
-from model import EmbeddingModel
-from dataset import imread_unicode, GalleryDataset 
+from lib import EmbeddingModel, imread_unicode, GalleryDataset, ClothingTransform
 from torch.utils.data import DataLoader
-from augment_images import A2ClothingTransform
 from torch.cuda.amp import autocast
 
 
@@ -202,7 +200,7 @@ def verify_real_world_image(
     # -----------------------
     # 2. Transform
     # -----------------------
-    transform = A2ClothingTransform(train=False)
+    transform = ClothingTransform(train=False)
 
     # -----------------------
     # 3. 构建 / 加载 gallery

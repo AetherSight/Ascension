@@ -128,7 +128,7 @@ class ClothingDataset(Dataset):
         
         # 初始化 transform
         if transform is None:
-            from transforms import ClothingTransform
+            from .transforms import ClothingTransform
             self.transform = ClothingTransform(train=is_train)
         else:
             self.transform = transform
