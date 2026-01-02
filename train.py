@@ -11,7 +11,7 @@ from tqdm import tqdm
 from lib import SupConClothingDataset, EmbeddingModel, SupConLoss, ClothingTransform
 
 
-def train_supcon(
+def train(
         data_root: str, 
         batch_size: int = 16, 
         target_batch: int = 128, 
@@ -107,11 +107,11 @@ def train_supcon(
 
 
 if __name__ == "__main__":
-    train_supcon(
+    train(
         data_root="S:\\FFXIV_train_dataset",
         batch_size=16,
         target_batch=128,
-        epochs=50,
+        epochs=60,
         warmup_epochs=5,
         lr=3e-4,
         save_dir="checkpoints"
