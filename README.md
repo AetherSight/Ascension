@@ -46,11 +46,11 @@ Organize your images according to the dataset structure described above.
 
 ### 3. Configure Training
 
-Edit `train.py` and modify the `train_supcon()` function call:
+Edit `train.py` and modify the `train()` function call:
 
 ```python
 if __name__ == "__main__":
-    train_supcon(
+    train(
         data_root="path/to/your/data",
         batch_size=16,
         target_batch=128,  # Effective batch size via gradient accumulation
