@@ -1,7 +1,4 @@
 import os
-import random
-from collections import defaultdict
-
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
@@ -111,11 +108,11 @@ def train_supcon(
 
 if __name__ == "__main__":
     train_supcon(
-        data_root="S:\\FFXIV_train_new",
+        data_root="S:\\FFXIV_train_dataset",
         batch_size=16,
         target_batch=128,
         epochs=50,
         warmup_epochs=5,
         lr=3e-4,
-        save_dir="checkpoints_supcon"
+        save_dir="checkpoints"
     )

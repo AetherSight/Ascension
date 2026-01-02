@@ -9,7 +9,7 @@ from .dataset import (
     SupConClothingDataset,
     ClothingDataset,
     create_dataloader,
-    imread_unicode
+    imread_unicode,
 )
 
 from .model import EmbeddingModel
