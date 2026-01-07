@@ -71,11 +71,25 @@ def train(
     if resume_path is not None:
         ckpt = torch.load(resume_path, map_location="cpu")
         model.load_state_dict(ckpt["model"], strict=True)
-
+        
         start_epoch = ckpt["epoch"] + 1
         best_loss = ckpt.get("loss", best_loss)
+        
+        if "optimizer" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer"])
+        if "scheduler" in ckpt:
+            main_scheduler.load_state_dict(ckpt["scheduler"])
+        else:
+            # Old checkpoint without scheduler state, manually restore
+            # Scheduler starts after warmup, so steps = epoch - warmup_epochs
+            if start_epoch > config["warmup_epochs"]:
+                scheduler_steps = ckpt["epoch"] - config["warmup_epochs"]
+                for _ in range(scheduler_steps):
+                    main_scheduler.step()
+                print(f"⚠️  Old checkpoint detected, manually restored scheduler to step {scheduler_steps}")
 
         print(f"🔁 Resume SupCon from epoch {ckpt['epoch']} → {start_epoch}")
+        print(f"📊 Current LR: {optimizer.param_groups[0]['lr']:.2e}")
 
     print(
         f"🚀 Physical Batch: {config['batch_size']} | "
@@ -133,6 +147,8 @@ def train(
 
         checkpoint = {
             "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": main_scheduler.state_dict(),
             "class_names": train_ds.class_names,
             "epoch": epoch,
             "loss": avg_loss
@@ -165,4 +181,5 @@ if __name__ == "__main__":
         warmup_epochs=5,
         lr=3e-4,
         save_dir="checkpoints",
+        resume_path="checkpoints/epoch_10_supcon.pth"
     )
