@@ -279,11 +279,27 @@ def verify_real_world_image(
 if __name__ == "__main__":
     test_images = [
         r"S:\FFXIV_train_test\4_2.JPG",
+        r"S:\FFXIV_train_test\a.JPG",
+        r"S:\FFXIV_train_test\b.JPG",
+        r"S:\FFXIV_train_test\c.JPG",
+        r"S:\FFXIV_train_test\d.JPG",
+        r"S:\FFXIV_train_test\e.JPG",
+        r"S:\FFXIV_train_test\1.JPG",
+        r"S:\FFXIV_train_test\1_back.JPG",
+        r"S:\FFXIV_train_test\1_front.JPG",
+        r"S:\FFXIV_train_test\1_front.png",
+        r"S:\FFXIV_train_test\1_side.JPG",
+        r"S:\FFXIV_train_test\1_part.JPG",
+        r"S:\FFXIV_train_test\2.JPG",
+        r"S:\FFXIV_train_test\4.JPG",
+        r"S:\FFXIV_train_test\5.JPG",
+        r"S:\FFXIV_train_test\6.JPG",
+        r"S:\FFXIV_train_test\unknown_1.JPG",
     ]
 
     verify_real_world_image(
-        model_path="checkpoints/epoch_50_supcon.pth",
-        gallery_root=r"S:\\FFXIV_train_new", 
+        model_path="checkpoints/epoch_60_supcon.pth",
+        gallery_root=r"S:\\FFXIV_train_dataset", 
         image_paths=test_images,
         top_k=5
     )
