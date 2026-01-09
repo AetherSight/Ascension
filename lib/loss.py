@@ -1,6 +1,6 @@
 """
 损失函数相关模块
-包含 Supervised Contrastive Loss
+包含 Supervised Contrastive Loss 和 Partial-to-Whole Contrastive Loss
 """
 
 import torch
@@ -49,6 +49,50 @@ class SupConLoss(nn.Module):
         # 计算平均对数似然
         mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
         loss = -mean_log_prob_pos.mean()
+        
+        return loss
+
+
+class PartialToWholeLoss(nn.Module):
+    """
+    部分到整体的对比学习损失
+    强制局部patch特征与完整图像特征相似
+    """
+    def __init__(self, temperature=0.07):
+        super(PartialToWholeLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, global_features, patch_features, labels, num_patches=4):
+        """
+        Args:
+            global_features: 完整图像特征 [B, D]
+            patch_features: 局部patch特征 [B*num_patches, D]
+            labels: 标签 [B] (未使用，保留接口兼容性)
+            num_patches: 每个图像的patch数量
+        """
+        B = global_features.shape[0]
+        
+        # 归一化
+        global_features = F.normalize(global_features, p=2, dim=1)  # [B, D]
+        patch_features = F.normalize(patch_features, p=2, dim=1)  # [B*num_patches, D]
+        
+        # 重新组织patch特征 [B, num_patches, D]
+        patch_features = patch_features.view(B, num_patches, -1)
+        
+        # 计算全局特征与patch特征的相似度
+        # global_features: [B, D] -> [B, 1, D]
+        # patch_features: [B, num_patches, D]
+        # similarity: [B, num_patches]
+        global_features_expanded = global_features.unsqueeze(1)  # [B, 1, D]
+        similarity = torch.bmm(global_features_expanded, patch_features.transpose(1, 2))  # [B, 1, num_patches]
+        similarity = similarity.squeeze(1) / self.temperature  # [B, num_patches]
+        
+        # 对于每个全局特征，它的所有patches都是正样本
+        # 计算每个patch与对应全局特征的对数概率
+        log_prob = similarity - torch.logsumexp(similarity, dim=1, keepdim=True)  # [B, num_patches]
+        
+        # 平均所有patches的对数概率
+        loss = -log_prob.mean()
         
         return loss
 

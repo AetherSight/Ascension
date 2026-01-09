@@ -13,7 +13,7 @@ from .dataset import (
 )
 
 from .model import EmbeddingModel
-from .loss import SupConLoss
+from .loss import SupConLoss, PartialToWholeLoss
 from .transforms import (
     ColorAgnosticTransform,
     ClothingTransform,
@@ -32,6 +32,7 @@ __all__ = [
     'EmbeddingModel',
     # Loss
     'SupConLoss',
+    'PartialToWholeLoss',
     # Transforms
     'ColorAgnosticTransform',
     'ClothingTransform',

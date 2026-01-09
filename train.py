@@ -8,7 +8,7 @@ from torch.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
-from lib import SupConClothingDataset, EmbeddingModel, SupConLoss, ClothingTransform
+from lib import SupConClothingDataset, EmbeddingModel, SupConLoss, PartialToWholeLoss, ClothingTransform
 from evaluate import evaluate_real_world_images
 
 
@@ -35,7 +35,11 @@ def train(
         "lr": lr,
         "save_dir": save_dir,
         "model_name": "tf_efficientnetv2_m",
-        "temperature": 0.1
+        "temperature": 0.1,
+        "use_partial_loss": True,
+        "partial_loss_weight": 0.5,
+        "num_patches": 4,
+        "patch_size": 256
     }
 
     accumulation_steps = max(1, config["target_batch"] // config["batch_size"])
@@ -58,8 +62,9 @@ def train(
     )
 
     # Model
-    model = EmbeddingModel(config["model_name"]).to(device)
+    model = EmbeddingModel(config["model_name"], use_local_features=True).to(device)
     criterion = SupConLoss(temperature=config["temperature"])
+    partial_criterion = PartialToWholeLoss(temperature=config["temperature"])
     optimizer = optim.AdamW(model.parameters(), lr=config["lr"], weight_decay=1e-4)
     main_scheduler = CosineAnnealingLR(
         optimizer,
@@ -125,12 +130,41 @@ def train(
             labels = labels.to(device)
 
             with autocast("cuda"):
-                embeddings = model(views)
-                embeddings = F.normalize(embeddings, dim=1)
-                loss = criterion(
-                    embeddings.view(bsz, 2, -1),
+                # 提取全局特征
+                global_emb, _ = model(views, return_local=False)
+                global_emb = F.normalize(global_emb, dim=1)
+                
+                # 全局对比损失
+                global_loss = criterion(
+                    global_emb.view(bsz, 2, -1),
                     labels
-                ) / accumulation_steps
+                )
+                
+                # 部分到整体对比损失
+                partial_loss = 0.0
+                if config.get("use_partial_loss", True) and (i % 2 == 0):  # 每2步计算一次，减少计算量
+                    # 从原始完整图像提取patch特征
+                    # views是增强后的，我们需要从原始batch中提取
+                    # 为了简化，我们从views中提取（虽然已经增强，但仍然是局部到整体的关系）
+                    patch_emb = model.extract_patch_features(
+                        views.view(bsz, 2, *views.shape[1:])[:, 0],  # 使用第一个view
+                        patch_size=config.get("patch_size", 256),
+                        num_patches=config.get("num_patches", 4)
+                    )
+                    
+                    # 计算部分到整体损失（使用第一个view的全局特征）
+                    global_for_partial = global_emb.view(bsz, 2, -1)[:, 0]  # [B, D]
+                    labels_for_partial = labels
+                    partial_loss = partial_criterion(
+                        global_for_partial,
+                        patch_emb,
+                        labels_for_partial,
+                        num_patches=config.get("num_patches", 4)
+                    )
+                
+                # 总损失
+                loss_weight = config.get("partial_loss_weight", 0.5)
+                loss = (global_loss + loss_weight * partial_loss) / accumulation_steps
 
             scaler.scale(loss).backward()
 
