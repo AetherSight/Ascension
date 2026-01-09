@@ -140,10 +140,148 @@ class StripeDropout(A.DualTransform):
         return ('stripe_width_range', 'position', 'fill_value')
 
 
+class LargeWhiteHole(A.DualTransform):
+    """
+    模拟抠图导致的白色孔洞（大的不规则白色区域）
+    """
+    def __init__(
+        self,
+        min_hole_size=(100, 100),
+        max_hole_size=(200, 200),
+        num_holes=(1, 3),
+        fill_value=255,
+        always_apply=False,
+        p=1.0
+    ):
+        super().__init__(always_apply=always_apply, p=p)
+        self.min_hole_size = min_hole_size
+        self.max_hole_size = max_hole_size
+        self.num_holes = num_holes
+        self.fill_value = fill_value
+
+    def apply(self, img, **params):
+        h, w = img.shape[:2]
+        img = img.copy()
+        
+        num_holes = random.randint(self.num_holes[0], self.num_holes[1])
+        
+        for _ in range(num_holes):
+            hole_w = random.randint(self.min_hole_size[0], self.max_hole_size[0])
+            hole_h = random.randint(self.min_hole_size[1], self.max_hole_size[1])
+            
+            # 确保孔洞在图像范围内
+            x = random.randint(0, max(1, w - hole_w))
+            y = random.randint(0, max(1, h - hole_h))
+            
+            # 创建椭圆形或矩形孔洞（更自然）
+            if random.random() < 0.5:
+                # 椭圆形孔洞
+                center_x = x + hole_w // 2
+                center_y = y + hole_h // 2
+                axes_x = hole_w // 2
+                axes_y = hole_h // 2
+                cv2.ellipse(img, (center_x, center_y), (axes_x, axes_y), 0, 0, 360, 
+                           (self.fill_value, self.fill_value, self.fill_value), -1)
+            else:
+                # 矩形孔洞
+                img[y:y+hole_h, x:x+hole_w] = self.fill_value
+        
+        return img
+
+    def apply_to_mask(self, mask, **params):
+        return self.apply(mask, **params)
+
+    def get_transform_init_args_names(self):
+        return ('min_hole_size', 'max_hole_size', 'num_holes', 'fill_value')
+
+
+class EdgePadding(A.DualTransform):
+    """
+    模拟抠图不干净，边缘多了部位（在边缘添加随机内容）
+    """
+    def __init__(
+        self,
+        padding_range=(20, 80),
+        fill_mode='random',  # 'random', 'white', 'noise', 'mirror'
+        always_apply=False,
+        p=1.0
+    ):
+        super().__init__(always_apply=always_apply, p=p)
+        self.padding_range = padding_range
+        self.fill_mode = fill_mode
+
+    def apply(self, img, **params):
+        h, w = img.shape[:2]
+        
+        # 随机选择要扩展的边（可以多边）
+        pad_top = random.randint(self.padding_range[0], self.padding_range[1]) if random.random() < 0.5 else 0
+        pad_bottom = random.randint(self.padding_range[0], self.padding_range[1]) if random.random() < 0.5 else 0
+        pad_left = random.randint(self.padding_range[0], self.padding_range[1]) if random.random() < 0.5 else 0
+        pad_right = random.randint(self.padding_range[0], self.padding_range[1]) if random.random() < 0.5 else 0
+        
+        if pad_top == 0 and pad_bottom == 0 and pad_left == 0 and pad_right == 0:
+            return img
+        
+        # 根据 fill_mode 填充
+        if self.fill_mode == 'white':
+            fill_value = 255
+        elif self.fill_mode == 'random':
+            # 随机颜色（模拟其他部位）
+            fill_value = (random.randint(200, 255), random.randint(200, 255), random.randint(200, 255))
+        elif self.fill_mode == 'noise':
+            # 噪声填充
+            fill_value = 'noise'
+        elif self.fill_mode == 'mirror':
+            # 镜像填充
+            fill_value = 'mirror'
+        else:
+            fill_value = 255
+        
+        if fill_value == 'noise':
+            # 噪声填充
+            img = cv2.copyMakeBorder(
+                img, pad_top, pad_bottom, pad_left, pad_right,
+                cv2.BORDER_CONSTANT, value=(128, 128, 128)
+            )
+            # 添加噪声
+            noise = np.random.randint(0, 255, (pad_top + h + pad_bottom, pad_left + w + pad_right, 3), dtype=np.uint8)
+            mask = np.zeros((pad_top + h + pad_bottom, pad_left + w + pad_right, 3), dtype=np.uint8)
+            mask[pad_top:pad_top+h, pad_left:pad_left+w] = 255
+            img = np.where(mask == 255, img, noise)
+        elif fill_value == 'mirror':
+            # 镜像填充
+            img = cv2.copyMakeBorder(
+                img, pad_top, pad_bottom, pad_left, pad_right,
+                cv2.BORDER_REFLECT_101
+            )
+        else:
+            # 常量填充
+            img = cv2.copyMakeBorder(
+                img, pad_top, pad_bottom, pad_left, pad_right,
+                cv2.BORDER_CONSTANT, value=fill_value
+            )
+        
+        return img
+
+    def apply_to_mask(self, mask, **params):
+        return self.apply(mask, **params)
+
+    def get_transform_init_args_names(self):
+        return ('padding_range', 'fill_mode')
+
+
 class ClothingTransform:
     def __init__(self, train=True, return_tensor=True):
         if train:
             base_transforms = [
+                # 边缘扩展（模拟抠图不干净，多了部位）
+                # 放在最前面，确保后续裁剪能保留部分边缘效果
+                EdgePadding(
+                    padding_range=(20, 80),
+                    fill_mode='random',  # 随机颜色模拟其他部位
+                    p=0.4
+                ),
+                
                 A.OneOf([
                     A.RandomResizedCrop(
                         height=512, width=512, 
@@ -158,7 +296,7 @@ class ClothingTransform:
                         p=1
                     ),
                 ], p=0.9),
-
+                
                 A.Resize(512, 512),
                 A.HorizontalFlip(p=0.5),
 
@@ -174,23 +312,34 @@ class ClothingTransform:
                 ),
 
                 A.OneOf([
+                    A.GaussianBlur(blur_limit=(3, 5), p=1.0),
+                    A.MotionBlur(blur_limit=5, p=1.0),
+                ], p=0.4),
+
+                A.OneOf([
                     A.ToGray(p=1.0),
                     A.ChannelShuffle(p=1.0),
-                ], p=0.25),
+                ], p=0.4),
 
                 A.HueSaturationValue(
                     hue_shift_limit=180,
-                    sat_shift_limit=(-50, 20),
-                    val_shift_limit=(-20, 30),
-                    p=0.6
+                    sat_shift_limit=(-80, 20),
+                    val_shift_limit=40,
+                    p=0.8
                 ),
 
                 A.ColorJitter(
-                    brightness=0.2,
-                    contrast=0.2,
-                    saturation=0.3,
-                    hue=0.1,
-                    p=0.6
+                    brightness=0.5,
+                    contrast=0.5,
+                    saturation=0.7,
+                    hue=0.15,
+                    p=0.8
+                ),
+
+                A.ChannelDropout(
+                    channel_drop_range=(1, 2),
+                    fill_value=0,
+                    p=0.3
                 ),
 
                 A.OneOf([
@@ -215,23 +364,38 @@ class ClothingTransform:
                         fill_value=255,
                         p=1.0
                     ),
-                ], p=0.6),
+                    LargeWhiteHole(
+                        min_hole_size=(100, 100),
+                        max_hole_size=(200, 200),
+                        num_holes=(1, 3),
+                        fill_value=255,
+                        p=1.0
+                    ),
+                ], p=0.7),  # 提高概率，因为这是核心问题
 
                 A.OneOf([
-                    A.Sharpen(alpha=(0.15, 0.35), lightness=(0.7, 1.0)),
-                    A.Emboss(alpha=(0.1, 0.3), strength=(0.3, 0.6)),
-                ], p=0.35),
+                    A.Sharpen(alpha=(0.2, 0.5), lightness=(0.7, 1.0), p=1.0),
+                    A.Emboss(alpha=(0.15, 0.4), strength=(0.4, 0.8), p=1.0),
+                    A.CLAHE(clip_limit=(2.0, 4.0), tile_grid_size=(8, 8), p=1.0),
+                ], p=0.5),
 
                 A.RandomBrightnessContrast(
-                    brightness_limit=0.15,
-                    contrast_limit=0.15,
-                    p=0.3
+                    brightness_limit=0.25,
+                    contrast_limit=0.25,
+                    p=0.4
                 ),
 
                 A.RandomGamma(
-                    gamma_limit=(85, 120),
-                    p=0.25
+                    gamma_limit=(80, 130),
+                    p=0.3
                 ),
+
+                A.OneOf([
+                    A.GaussNoise(var_limit=(10.0, 30.0), p=1.0),
+                    A.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.3), p=1.0),
+                ], p=0.3),
+
+                A.ToGray(p=0.15),
             ]
         else:
             base_transforms = [

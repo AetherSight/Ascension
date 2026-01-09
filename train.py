@@ -9,6 +9,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from tqdm import tqdm
 
 from lib import SupConClothingDataset, EmbeddingModel, SupConLoss, ClothingTransform
+from evaluate import evaluate_real_world_images
 
 
 def train(
@@ -19,7 +20,11 @@ def train(
     warmup_epochs: int = 5, 
     lr: float = 3e-4, 
     save_dir: str = "checkpoints",
-    resume_path: str | None = None,   # ⭐ 新增
+    resume_path: str | None = None,
+    # 评估相关参数
+    eval_gallery_root: str | None = None,  # gallery 路径
+    eval_image_paths: list[str] | None = None,  # 测试图片路径列表
+    eval_top_k: int = 5,  # 评估时输出的 top-k
 ):
     config = {
         "data_root": data_root,
@@ -168,11 +173,61 @@ def train(
                     config["save_dir"], f"epoch_{epoch}_supcon.pth"
                 )
             )
+            
+            # 每5轮评估真实图片效果
+            if eval_gallery_root and eval_image_paths:
+                print(f"\n{'='*60}")
+                print(f"📊 Epoch {epoch} - 评估真实图片效果")
+                print(f"{'='*60}")
+                
+                try:
+                    cache_path = os.path.join(config["save_dir"], f"epoch_{epoch}_gallery_cache.pth")
+                    results = evaluate_real_world_images(
+                        model=model,
+                        gallery_root=eval_gallery_root,
+                        image_paths=eval_image_paths,
+                        device=device,
+                        top_k=eval_top_k,
+                        cache_path=cache_path
+                    )
+                    
+                    for img_path, top_results in results:
+                        print(f"\n[Query] {os.path.basename(img_path)}")
+                        for i, (label, score) in enumerate(top_results, 1):
+                            print(f"  Top-{i}: {label} (cos={score:.4f})")
+                    
+                    print(f"{'='*60}\n")
+                except Exception as e:
+                    print(f"⚠️  评估失败: {e}\n")
 
     print("✅ SupCon 训练完成")
 
 
 if __name__ == "__main__":
+    # 测试图片路径（可根据需要修改）
+    test_images = [
+        r"S:\FFXIV_train_test\a.JPG",
+        r"S:\FFXIV_train_test\b.JPG",
+        r"S:\FFXIV_train_test\c.JPG",
+        r"S:\FFXIV_train_test\d.JPG",
+        r"S:\FFXIV_train_test\e.JPG",
+        r"S:\FFXIV_train_test\1.JPG",
+        r"S:\FFXIV_train_test\1_back.JPG",
+        r"S:\FFXIV_train_test\1_front.JPG",
+        r"S:\FFXIV_train_test\1_front.png",
+        r"S:\FFXIV_train_test\1_side.JPG",
+        r"S:\FFXIV_train_test\1_part.JPG",
+        r"S:\FFXIV_train_test\2.JPG",
+        r"S:\FFXIV_train_test\4.JPG",
+        r"S:\FFXIV_train_test\4_2.JPG",
+        r"S:\FFXIV_train_test\5.JPG",
+        r"S:\FFXIV_train_test\6.JPG",
+        r"S:\FFXIV_train_test\unknown_1.JPG",
+        r"S:\FFXIV_train_test\鬼师.png",
+        r"S:\FFXIV_train_test\玉韦亚瓦塔强袭短衣.png",
+        r"S:\FFXIV_train_test\download.png",
+    ]
+    
     train(
         data_root="S:\\FFXIV_train_dataset",
         batch_size=16,
@@ -181,5 +236,8 @@ if __name__ == "__main__":
         warmup_epochs=5,
         lr=3e-4,
         save_dir="checkpoints",
-        resume_path="checkpoints/epoch_10_supcon.pth"
+        # 评估配置（设置为 None 可禁用评估）
+        eval_gallery_root=r"S:\FFXIV_train_dataset",
+        eval_image_paths=test_images,
+        eval_top_k=5,
     )

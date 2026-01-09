@@ -167,7 +167,85 @@ def build_gallery(
 
 
 # =========================================================
-# 实拍图 Top-K 检索
+# 实拍图 Top-K 检索（使用模型对象）
+# =========================================================
+@torch.no_grad()
+def evaluate_real_world_images(
+    model,
+    gallery_root,
+    image_paths,
+    device,
+    top_k=5,
+    top_n=50,
+    cache_path=None
+):
+    """
+    使用模型对象直接评估真实图片（用于训练过程中的评估）
+    
+    参数：
+        model: EmbeddingModel 实例（已加载到 device）
+        gallery_root: gallery 图片根目录
+        image_paths: list, 待查询图片路径
+        device: torch.device
+        top_k: int, 最终输出 top-K
+        top_n: int, 去重前取的 top-N
+        cache_path: str, gallery cache 路径（可选）
+    """
+    model.eval()
+    transform = ClothingTransform(train=False)
+    
+    # 构建 gallery
+    gallery_embs, gallery_labels = build_gallery(
+        model,
+        gallery_root,
+        transform,
+        device,
+        batch_size=128,
+        num_workers=4,  # 训练时减少 workers
+        cache_path=cache_path
+    )
+    
+    # 查询并输出结果
+    results = []
+    for img_path in image_paths:
+        if not os.path.exists(img_path):
+            continue
+            
+        img = imread_unicode(img_path)
+        if img is None:
+            continue
+            
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        query = transform(img).unsqueeze(0).to(device)
+        query_emb = model(query).cpu()
+        query_emb = F.normalize(query_emb, dim=1)
+        
+        sims = torch.matmul(query_emb, gallery_embs.T)[0]
+        vals, idxs = torch.topk(sims, min(top_n, sims.size(0)))
+        
+        seen = {}
+        for v, idx in zip(vals.tolist(), idxs.tolist()):
+            label = gallery_labels[idx]
+            if label not in seen or v > seen[label]:
+                seen[label] = v
+        
+        if len(seen) < top_k:
+            all_idxs = torch.argsort(sims, descending=True)
+            for idx in all_idxs.tolist():
+                label = gallery_labels[idx]
+                if label not in seen:
+                    seen[label] = sims[idx].item()
+                if len(seen) >= top_k:
+                    break
+        
+        final = sorted(seen.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        results.append((img_path, final))
+    
+    return results
+
+
+# =========================================================
+# 实拍图 Top-K 检索（从文件加载模型）
 # =========================================================
 @torch.no_grad()
 def verify_real_world_image(
@@ -295,11 +373,12 @@ if __name__ == "__main__":
         r"S:\FFXIV_train_test\5.JPG",
         r"S:\FFXIV_train_test\6.JPG",
         r"S:\FFXIV_train_test\unknown_1.JPG",
+        r"S:\FFXIV_train_test\鬼师.png",
     ]
 
     verify_real_world_image(
-        model_path="checkpoints/epoch_60_supcon.pth",
+        model_path="checkpoints/epoch_50_supcon.pth",
         gallery_root=r"S:\\FFXIV_train_dataset", 
         image_paths=test_images,
-        top_k=5
+        top_k=10
     )
