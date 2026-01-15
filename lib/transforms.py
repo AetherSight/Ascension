@@ -142,7 +142,7 @@ class StripeDropout(A.DualTransform):
 
 class LargeWhiteHole(A.DualTransform):
     """
-    模拟抠图导致的白色孔洞（大的不规则白色区域）
+    Simulate large irregular white holes caused by bad matting.
     """
     def __init__(
         self,
@@ -195,9 +195,67 @@ class LargeWhiteHole(A.DualTransform):
         return ('min_hole_size', 'max_hole_size', 'num_holes', 'fill_value')
 
 
+class HalfOcclusion(A.DualTransform):
+    """
+    Occlude exactly 50% of the image (left/right or top/bottom) with a solid color.
+    Overall probability is controlled by `p` when added into the pipeline.
+    """
+    def __init__(
+        self,
+        fill_value=255,
+        always_apply=False,
+        p=0.2
+    ):
+        super().__init__(always_apply=always_apply, p=p)
+        self.fill_value = fill_value
+
+    def apply(self, img, **params):
+        h, w = img.shape[:2]
+        img = img.copy()
+
+        # Randomly choose occlusion pattern:
+        #   1) vertical stripe (left or right 40%)
+        #   2) horizontal stripe (top or bottom 40%)
+        #   3) vertical thirds (left 33% + right 33%, keep center 33%)
+        mode = random.random()
+
+        if mode < 1/3:
+            # Vertical stripe: left or right 40% of width
+            stripe_w = int(w * 0.4)
+            if random.random() < 0.5:
+                # Left 40%
+                img[:, :stripe_w] = self.fill_value
+            else:
+                # Right 40%
+                img[:, w - stripe_w :] = self.fill_value
+        elif mode < 2/3:
+            # Horizontal stripe: top or bottom 40% of height
+            stripe_h = int(h * 0.4)
+            if random.random() < 0.5:
+                # Top 40%
+                img[:stripe_h, :] = self.fill_value
+            else:
+                # Bottom 40%
+                img[h - stripe_h :, :] = self.fill_value
+        else:
+            # Vertical thirds: occlude left 33% and right 33%, keep center 33%
+            left_end = int(w / 3)
+            right_start = int(2 * w / 3)
+            img[:, :left_end] = self.fill_value
+            img[:, right_start:] = self.fill_value
+
+        return img
+
+    def apply_to_mask(self, mask, **params):
+        return self.apply(mask, **params)
+
+    def get_transform_init_args_names(self):
+        return ('fill_value',)
+
+
 class EdgePadding(A.DualTransform):
     """
-    模拟抠图不干净，边缘多了部位（在边缘添加随机内容）
+    Simulate imperfect matting with extra content around the edges.
     """
     def __init__(
         self,
@@ -270,41 +328,134 @@ class EdgePadding(A.DualTransform):
         return ('padding_range', 'fill_mode')
 
 
+class PatchTransform:
+    """
+    Patch专用的轻微增强transform
+    以轻微的颜色、灰度、饱和度和几何增强为主，可加入少量小遮挡
+    """
+    def __init__(self, return_tensor=True):
+        base_transforms = [
+            A.Affine(
+                rotate=(-8, 8),
+                shear=(-3, 3),
+                scale=(0.95, 1.05),
+                translate_percent=(-0.02, 0.02),
+                interpolation=cv2.INTER_LINEAR,
+                mode=cv2.BORDER_CONSTANT,
+                cval=255,
+                p=0.4
+            ),
+            
+            A.OneOf([
+                A.ToGray(p=1.0),
+                A.ChannelShuffle(p=1.0),
+            ], p=0.2),
+            
+            A.HueSaturationValue(
+                hue_shift_limit=15,
+                sat_shift_limit=(-15, 15),
+                val_shift_limit=10,
+                p=0.4
+            ),
+            
+            A.ColorJitter(
+                brightness=0.1,
+                contrast=0.1,
+                saturation=0.15,
+                hue=0.03,
+                p=0.4
+            ),
+            
+            A.RandomBrightnessContrast(
+                brightness_limit=0.1,
+                contrast_limit=0.1,
+                p=0.3
+            ),
+            
+            A.RandomGamma(
+                gamma_limit=(95, 105),
+                p=0.2
+            ),
+
+            # Small–medium local holes on patches to simulate realistic occlusion
+            A.CoarseDropout(
+                max_holes=5,
+                min_holes=2,
+                max_height=40,
+                max_width=40,
+                min_height=12,
+                min_width=12,
+                fill_value=255,
+                p=0.4
+            ),
+        ]
+        
+        self.transform = A.Compose(
+            base_transforms + (
+                [
+                    A.Normalize(
+                        mean=(0.485, 0.456, 0.406),
+                        std=(0.229, 0.224, 0.225)
+                    ),
+                    ToTensorV2()
+                ] if return_tensor else []
+            )
+        )
+    
+    def __call__(self, image):
+        return self.transform(image=image)["image"]
+
+
 class ClothingTransform:
     def __init__(self, train=True, return_tensor=True):
         if train:
             base_transforms = [
-                # 边缘扩展（模拟抠图不干净，多了部位）
-                # 放在最前面，确保后续裁剪能保留部分边缘效果
+                # Edge padding (simulate imperfect matting with extra parts)
+                # Put first so that later crops can keep some edge artifacts
                 EdgePadding(
                     padding_range=(20, 80),
-                    fill_mode='random',  # 随机颜色模拟其他部位
+                    fill_mode='random',
                     p=0.4
                 ),
                 
+                # RandomResizedCrop is now used mainly for mild global jitter
+                # plus a rarer moderate local crop. Strong local perception is
+                # handled by the dedicated patch pipeline.
                 A.OneOf([
+                    # Global‑biased crop: keep 70%–100% content, slight aspect jitter
                     A.RandomResizedCrop(
-                        height=512, width=512, 
-                        scale=(0.5, 1.0), 
-                        ratio=(0.8, 1.2), 
+                        height=512, width=512,
+                        scale=(0.7, 1.0),
+                        ratio=(0.9, 1.15),
                         p=1
                     ),
+                    # Moderate local crop: 40%–70% area, still not too extreme
                     A.RandomResizedCrop(
-                        height=512, width=512, 
-                        scale=(0.20, 0.40), 
-                        ratio=(0.75, 1.33), 
+                        height=512, width=512,
+                        scale=(0.4, 0.7),
+                        ratio=(0.9, 1.2),
                         p=1
                     ),
-                ], p=0.9),
+                ], p=0.7),
                 
-                A.Resize(512, 512),
+                # Slight global zoom-in to make the garment occupy more area,
+                # then center crop back to 512x512 to reduce white background.
+                A.Resize(614, 614),
+                A.CenterCrop(512, 512),
                 A.HorizontalFlip(p=0.5),
+
+                # 50% half-image occlusion (left/right or top/bottom) with overall prob 20%
+                HalfOcclusion(
+                    fill_value=255,
+                    p=0.2
+                ),
 
                 A.Affine(
                     rotate=(-20, 20),
                     shear=(-8, 8),
                     scale=(0.9, 1.1),
-                    translate_percent=(-0.05, 0.05),
+                    # Use small translation to avoid aggressive shifting of the garment
+                    translate_percent=(-0.02, 0.02),
                     interpolation=cv2.INTER_NEAREST,
                     mode=cv2.BORDER_CONSTANT,
                     cval=255,
@@ -319,27 +470,27 @@ class ClothingTransform:
                 A.OneOf([
                     A.ToGray(p=1.0),
                     A.ChannelShuffle(p=1.0),
-                ], p=0.4),
+                ], p=0.25),
 
                 A.HueSaturationValue(
-                    hue_shift_limit=180,
-                    sat_shift_limit=(-80, 20),
-                    val_shift_limit=40,
-                    p=0.8
+                    hue_shift_limit=30,
+                    sat_shift_limit=(-30, 30),
+                    val_shift_limit=20,
+                    p=0.5
                 ),
 
                 A.ColorJitter(
-                    brightness=0.5,
-                    contrast=0.5,
-                    saturation=0.7,
-                    hue=0.15,
-                    p=0.8
+                    brightness=0.2,
+                    contrast=0.2,
+                    saturation=0.3,
+                    hue=0.05,
+                    p=0.5
                 ),
 
                 A.ChannelDropout(
-                    channel_drop_range=(1, 2),
+                    channel_drop_range=(1, 1),
                     fill_value=0,
-                    p=0.3
+                    p=0.15
                 ),
 
                 A.OneOf([
@@ -358,15 +509,15 @@ class ClothingTransform:
                         fill_value=255,
                         p=1.0
                     ),
-                    StripeDropout(
-                        stripe_width_range=(70, 100),
-                        position='random',
-                        fill_value=255,
-                        p=1.0
-                    ),
+                    #StripeDropout(
+                    #    stripe_width_range=(70, 100),
+                    #    position='random',
+                    #    fill_value=255,
+                    #    p=1.0
+                    #),
                     LargeWhiteHole(
-                        min_hole_size=(100, 100),
-                        max_hole_size=(200, 200),
+                        min_hole_size=(80, 80),
+                        max_hole_size=(100, 100),
                         num_holes=(1, 3),
                         fill_value=255,
                         p=1.0
@@ -380,14 +531,14 @@ class ClothingTransform:
                 ], p=0.5),
 
                 A.RandomBrightnessContrast(
-                    brightness_limit=0.25,
-                    contrast_limit=0.25,
-                    p=0.4
+                    brightness_limit=0.15,
+                    contrast_limit=0.15,
+                    p=0.3
                 ),
 
                 A.RandomGamma(
-                    gamma_limit=(80, 130),
-                    p=0.3
+                    gamma_limit=(90, 110),
+                    p=0.2
                 ),
 
                 A.OneOf([
@@ -395,7 +546,7 @@ class ClothingTransform:
                     A.ISONoise(color_shift=(0.01, 0.05), intensity=(0.1, 0.3), p=1.0),
                 ], p=0.3),
 
-                A.ToGray(p=0.15),
+                A.ToGray(p=0.1),
             ]
         else:
             base_transforms = [
@@ -418,41 +569,116 @@ class ClothingTransform:
         return self.transform(image=image)["image"]
 
 
-def preview_augmentations(image_path, grid_size=(5, 5), output_path=None, show=True):
+def preview_augmentations(image_path, grid_size=(5, 5), output_path=None, show=True, preview_patches=False, patch_size=224, num_patches_per_image=3):
+    """
+    预览数据增强效果
+    
+    Args:
+        image_path: 图片路径
+        grid_size: 网格大小 (rows, cols)
+        output_path: 输出路径
+        show: 是否显示
+        preview_patches: 是否预览patch（局部特征）
+        patch_size: patch大小
+        num_patches_per_image: 每张增强图像提取的patch数量
+    """
     image = imread_unicode(image_path)
     if image is None:
         raise ValueError(f"无法读取图片: {image_path}")
     
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     transform = ClothingTransform(train=True, return_tensor=False)
+    patch_transform = PatchTransform(return_tensor=False)
     
     rows, cols = grid_size
     num_images = rows * cols
     
-    augmented_images = []
-    for i in range(num_images):
-        np.random.seed(i)
-        augmented = transform(image_rgb)
-        augmented_images.append(augmented)
-    
-    target_h, target_w = 256, 256
-    resized_images = []
-    for img in augmented_images:
-        resized = cv2.resize(img, (target_w, target_h))
-        resized_images.append(resized)
-    
-    grid_h = rows * target_h
-    grid_w = cols * target_w
-    grid_image = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
-    
-    for idx, img in enumerate(resized_images):
-        row = idx // cols
-        col = idx % cols
-        y_start = row * target_h
-        y_end = y_start + target_h
-        x_start = col * target_w
-        x_end = x_start + target_w
-        grid_image[y_start:y_end, x_start:x_end] = img
+    if preview_patches:
+        patch_images = []
+        
+        H, W = image_rgb.shape[:2]
+        
+        center_h = H / 2.0
+        center_w = W / 2.0
+        
+        patch_idx = 0
+        while patch_idx < num_images:
+            np.random.seed(patch_idx)
+            
+            offset_h_ratio = np.random.uniform(-0.20, 0.20)
+            offset_w_ratio = np.random.uniform(-0.1, 0.1)
+            
+            offset_h = offset_h_ratio * H
+            offset_w = offset_w_ratio * W
+            
+            patch_center_h = center_h + offset_h
+            patch_center_w = center_w + offset_w
+            
+            top = int(patch_center_h - patch_size / 2.0)
+            left = int(patch_center_w - patch_size / 2.0)
+            
+            top = max(0, min(top, H - patch_size))
+            left = max(0, min(left, W - patch_size))
+            
+            patch = image_rgb[top:top+patch_size, left:left+patch_size]
+            
+            if patch.shape[0] < patch_size or patch.shape[1] < patch_size:
+                patch = cv2.resize(patch, (patch_size, patch_size), interpolation=cv2.INTER_LINEAR)
+            
+            np.random.seed(patch_idx)
+            augmented_patch = patch_transform(patch)
+            
+            patch_images.append(augmented_patch)
+            patch_idx += 1
+        
+        target_h, target_w = 256, 256
+        resized_images = []
+        for img in patch_images:
+            resized = cv2.resize(img, (target_w, target_h))
+            resized_images.append(resized)
+        
+        grid_h = rows * target_h
+        grid_w = cols * target_w
+        grid_image = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
+        
+        for idx, img in enumerate(resized_images):
+            row = idx // cols
+            col = idx % cols
+            y_start = row * target_h
+            y_end = y_start + target_h
+            x_start = col * target_w
+            x_end = x_start + target_w
+            grid_image[y_start:y_end, x_start:x_end] = img
+        
+        title = f'Patch预览 ({rows}x{cols} 网格, patch_size={patch_size})'
+    else:
+        # 原有逻辑：预览完整增强图像
+        augmented_images = []
+        for i in range(num_images):
+            np.random.seed(i)
+            augmented = transform(image_rgb)
+            augmented_images.append(augmented)
+        
+        target_h, target_w = 256, 256
+        resized_images = []
+        for img in augmented_images:
+            resized = cv2.resize(img, (target_w, target_h))
+            resized_images.append(resized)
+        
+        grid_h = rows * target_h
+        grid_w = cols * target_w
+        grid_image = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
+        
+        for idx, img in enumerate(resized_images):
+            row = idx // cols
+            col = idx % cols
+            y_start = row * target_h
+            y_end = y_start + target_h
+            x_start = col * target_w
+            x_end = x_start + target_w
+            grid_image[y_start:y_end, x_start:x_end] = img
+        
+        title = f'数据增强预览 ({rows}x{cols} 网格)'
     
     grid_image_bgr = cv2.cvtColor(grid_image, cv2.COLOR_RGB2BGR)
     
@@ -466,7 +692,7 @@ def preview_augmentations(image_path, grid_size=(5, 5), output_path=None, show=T
             plt.figure(figsize=(15, 15))
             plt.imshow(grid_image)
             plt.axis('off')
-            plt.title(f'数据增强预览 ({rows}x{cols} 网格)', fontsize=16, pad=20)
+            plt.title(title, fontsize=16, pad=20)
             plt.tight_layout()
             plt.show()
         except ImportError:
@@ -481,13 +707,28 @@ def preview_augmentations(image_path, grid_size=(5, 5), output_path=None, show=T
 
 if __name__ == "__main__":
     import sys
+    if len(sys.argv) < 2:
+        print("Usage: python transforms.py <image_path> [preview_patches]")
+        print("  preview_patches: 'true' or 'false' (default: false)")
+        sys.exit(1)
+    
     image_path = sys.argv[1]
+    preview_patches = sys.argv[2].lower() == 'true' if len(sys.argv) > 2 else False
     
     if os.path.exists(image_path):
-        print("正在生成数据增强预览...")
+        if preview_patches:
+            print("正在生成Patch预览...")
+            output_path = "preview_patches.jpg"
+        else:
+            print("正在生成数据增强预览...")
+            output_path = "preview_augmentations.jpg"
+        
         preview_augmentations(
             image_path=image_path,
             grid_size=(5, 5),
-            output_path="preview_augmentations.jpg",
-            show=True
+            output_path=output_path,
+            show=True,
+            preview_patches=preview_patches,
+            patch_size=224,
+            num_patches_per_image=3
         )

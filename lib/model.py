@@ -26,18 +26,16 @@ class EmbeddingModel(nn.Module):
         self.backbone = timm.create_model(
             model_name,
             pretrained=True,
-            num_classes=0  # 去掉分类头
+            num_classes=0
         )
         
         backbone_dim = self.backbone.num_features
         
-        # 全局特征头
         self.global_head = nn.Sequential(
             nn.Linear(backbone_dim, emb_dim),
             nn.BatchNorm1d(emb_dim)
         )
         
-        # 局部特征头（与全局共享backbone，但使用独立的head）
         if use_local_features:
             self.local_head = nn.Sequential(
                 nn.Linear(backbone_dim, emb_dim),
@@ -59,53 +57,58 @@ class EmbeddingModel(nn.Module):
         feat = self.backbone(x)
         
         if return_local and self.use_local_features:
-            # 提取局部特征
             local_emb = self.local_head(feat)
             local_emb = F.normalize(local_emb, dim=1)
             return None, local_emb
         else:
-            # 提取全局特征
             global_emb = self.global_head(feat)
             global_emb = F.normalize(global_emb, dim=1)
             return global_emb, None
     
     def extract_patch_features(self, x, patch_size=256, num_patches=4):
-        """
-        从完整图像中提取局部patch特征
-        
-        Args:
-            x: 完整图像 [B, C, H, W]
-            patch_size: patch大小
-            num_patches: 提取的patch数量
-        
-        Returns:
-            patch_features: [B*num_patches, emb_dim]
-        """
         if not self.use_local_features:
             raise ValueError("use_local_features must be True to extract patch features")
         
         B, C, H, W = x.shape
         device = x.device
         
-        # 随机采样patches
-        patches = []
-        for b in range(B):
-            for _ in range(num_patches):
-                # 随机位置
-                max_top = max(1, H - patch_size + 1)
-                max_left = max(1, W - patch_size + 1)
-                top = torch.randint(0, max_top, (1,), device=device).item()
-                left = torch.randint(0, max_left, (1,), device=device).item()
-                
-                patch = x[b:b+1, :, top:top+patch_size, left:left+patch_size]
-                # 如果patch太小，resize到patch_size
-                if patch.shape[2] < patch_size or patch.shape[3] < patch_size:
-                    patch = F.interpolate(patch, size=(patch_size, patch_size), mode='bilinear', align_corners=False)
-                patches.append(patch.squeeze(0))
+        center_h = H / 2.0
+        center_w = W / 2.0
         
-        patches = torch.stack(patches)  # [B*num_patches, C, patch_size, patch_size]
+        offset_h_ratios = torch.empty(B, num_patches, device=device).uniform_(-0.20, 0.20)
+        offset_w_ratios = torch.empty(B, num_patches, device=device).uniform_(-0.1, 0.1)
         
-        # 提取局部特征
+        offset_h = offset_h_ratios * H
+        offset_w = offset_w_ratios * W
+        
+        patch_center_h = center_h + offset_h
+        patch_center_w = center_w + offset_w
+        
+        top_positions = (patch_center_h - patch_size / 2.0).long()
+        left_positions = (patch_center_w - patch_size / 2.0).long()
+        
+        top_positions = torch.clamp(top_positions, 0, H - patch_size)
+        left_positions = torch.clamp(left_positions, 0, W - patch_size)
+        
+        batch_indices = torch.arange(B, device=device).unsqueeze(1).expand(-1, num_patches)
+        batch_indices = batch_indices.flatten()
+        top_positions_flat = top_positions.flatten()
+        left_positions_flat = left_positions.flatten()
+        
+        patches_list = []
+        for i in range(B * num_patches):
+            b_idx = batch_indices[i]
+            top = top_positions_flat[i].item()
+            left = left_positions_flat[i].item()
+            
+            patch = x[b_idx:b_idx+1, :, top:top+patch_size, left:left+patch_size]
+            
+            if patch.shape[2] < patch_size or patch.shape[3] < patch_size:
+                patch = F.interpolate(patch, size=(patch_size, patch_size), mode='bilinear', align_corners=False)
+            
+            patches_list.append(patch.squeeze(0))
+        
+        patches = torch.stack(patches_list)
         _, patch_emb = self.forward(patches, return_local=True)
         return patch_emb
 

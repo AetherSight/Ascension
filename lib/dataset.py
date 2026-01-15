@@ -84,7 +84,11 @@ class SupConClothingDataset(ClothingFolderDataset):
         v1 = self.transform(image)
         v2 = self.transform(image)
 
-        return torch.stack([v1, v2], dim=0), label
+        # 返回原始图像（不resize），用于patch提取，实现"局部放大"效果
+        # 与preview_augmentations保持一致，从原始尺寸提取patch
+        original_image = image
+
+        return torch.stack([v1, v2], dim=0), original_image, label
 
 
 class ClothingDataset(Dataset):
