@@ -309,29 +309,6 @@ def train(
 
 
 if __name__ == "__main__":
-    test_images = [
-        r"S:\FFXIV_train_test\a.JPG",
-        r"S:\FFXIV_train_test\b.JPG",
-        r"S:\FFXIV_train_test\c.JPG",
-        r"S:\FFXIV_train_test\d.JPG",
-        r"S:\FFXIV_train_test\e.JPG",
-        r"S:\FFXIV_train_test\1.JPG",
-        r"S:\FFXIV_train_test\1_back.JPG",
-        r"S:\FFXIV_train_test\1_front.JPG",
-        r"S:\FFXIV_train_test\1_front.png",
-        r"S:\FFXIV_train_test\1_side.JPG",
-        r"S:\FFXIV_train_test\1_part.JPG",
-        r"S:\FFXIV_train_test\2.JPG",
-        r"S:\FFXIV_train_test\4.JPG",
-        r"S:\FFXIV_train_test\4_2.JPG",
-        r"S:\FFXIV_train_test\5.JPG",
-        r"S:\FFXIV_train_test\6.JPG",
-        r"S:\FFXIV_train_test\unknown_1.JPG",
-        r"S:\FFXIV_train_test\鬼师.png",
-        r"S:\FFXIV_train_test\玉韦亚瓦塔强袭短衣.png",
-        r"S:\FFXIV_train_test\download.png",
-    ]
-    
     train(
         data_root="S:\\FFXIV_train_dataset",
         batch_size=12,
@@ -340,5 +317,5 @@ if __name__ == "__main__":
         warmup_epochs=5,
         lr=3e-4,
         save_dir="checkpoints_0.0.3",
-        resume_path="checkpoints_0.0.3/epoch_35_supcon.pth",
+        resume_path="checkpoints_0.0.3/epoch_30_supcon.pth",
     )

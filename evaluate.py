@@ -392,7 +392,7 @@ if __name__ == "__main__":
     ]
 
     verify_real_world_image(
-        model_path="checkpoints_0.0.3/epoch_30_supcon.pth",
+        model_path="checkpoints_0.0.3/epoch_15_supcon.pth",
         gallery_root=r"S:\\FFXIV_train_dataset", 
         image_paths=test_images,
         top_k=10,
