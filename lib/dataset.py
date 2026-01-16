@@ -1,22 +1,23 @@
 import os
-import numpy as np
-import cv2
-import torch
-
+import random
 from pathlib import Path
-from torch.utils.data import Dataset, DataLoader
+
+import cv2
+import numpy as np
+import torch
+from torch.utils.data import Dataset
 
 
-def imread_unicode(image_path):
+def imread_unicode(image_path: str):
+    """Read image from a Unicode path using OpenCV."""
     img_array = np.fromfile(image_path, dtype=np.uint8)
     img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
     return img
 
 
 class GalleryDataset(Dataset):
-    """
-    用于构建 gallery embedding 的 Dataset
-    """
+    """Dataset used to build gallery embeddings."""
+
     def __init__(self, image_paths, labels, transform):
         self.image_paths = image_paths
         self.labels = labels
@@ -27,197 +28,127 @@ class GalleryDataset(Dataset):
 
     def __getitem__(self, idx):
         img_path = self.image_paths[idx]
-
         img = imread_unicode(img_path)
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-        img = self.transform(img)
-
-        return img, self.labels[idx]
-
-
-class ClothingFolderDataset(Dataset):
-    def __init__(self, root_dir, class_names=None, transform=None):
-        self.root_dir = Path(root_dir)
-        
-        all_classes = sorted([d.name for d in self.root_dir.iterdir() if d.is_dir()])
-        self.class_names = all_classes if class_names is None else class_names
-        self.class_to_idx = {c: i for i, c in enumerate(self.class_names)}
-        
-        self.image_paths = []
-        self.labels = []
-        
-        for cls in self.class_names:
-            cls_dir = self.root_dir / cls
-            if not cls_dir.exists():
-                continue
-            for img in cls_dir.iterdir():
-                if img.suffix.lower() in {".jpg", ".png", ".jpeg", ".webp"}:
-                    self.image_paths.append(str(img))
-                    self.labels.append(self.class_to_idx[cls])
-        
-        self.transform = transform
-    
-    def __len__(self):
-        return len(self.image_paths)
-    
-    def __getitem__(self, idx):
-        img = imread_unicode(self.image_paths[idx])
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         img = self.transform(img)
         return img, self.labels[idx]
 
 
-class SupConClothingDataset(ClothingFolderDataset):
-    def __init__(self, root, transform):
-        super().__init__(root, transform=None)
-        self.transform = transform
-
-    def __getitem__(self, idx):
-        img_path = self.image_paths[idx]
-        label = self.labels[idx]
-
-        image = imread_unicode(img_path)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-        # SupCon: two views
-        v1 = self.transform(image)
-        v2 = self.transform(image)
-
-        # 返回原始图像（不resize），用于patch提取，实现"局部放大"效果
-        # 与preview_augmentations保持一致，从原始尺寸提取patch
-        original_image = image
-
-        return torch.stack([v1, v2], dim=0), original_image, label
-
-
-class ClothingDataset(Dataset):
+class MixedSupConClothingDataset(Dataset):
     """
-    服装数据集类，使用 ClothingTransform 进行数据增强
+    SupCon dataset that samples from both renderings and real photos.
+    - Render images use heavy augmentation.
+    - Real images use light augmentation.
+    - Sampling probability from the real set is based on real image count.
     """
-    def __init__(self, image_paths, labels=None, transform=None, is_train=True):
-        """
-        Args:
-            image_paths: 图片路径列表，可以是：
-                        - 字符串列表：['path/to/img1.jpg', 'path/to/img2.jpg', ...]
-                        - 文件夹路径：'path/to/images'（会自动扫描所有图片）
-            labels: 标签列表，如果为 None 则返回图片路径作为标签
-            transform: ClothingTransform 实例，如果为 None 则自动创建
-            is_train: 是否为训练模式（决定使用哪种 transform）
-        """
-        # 处理图片路径
-        if isinstance(image_paths, str):
-            # 如果是文件夹路径，扫描所有图片文件
-            if os.path.isdir(image_paths):
-                self.image_paths = self._scan_images(image_paths)
-            else:
-                # 如果是单个文件路径
-                self.image_paths = [image_paths] if os.path.exists(image_paths) else []
-        elif isinstance(image_paths, list):
-            self.image_paths = [p for p in image_paths if os.path.exists(p)]
-        else:
-            raise ValueError("image_paths 必须是字符串（路径）或字符串列表")
-        
-        if len(self.image_paths) == 0:
-            raise ValueError("未找到任何有效的图片文件")
-        
-        # 处理标签
-        if labels is None:
-            # 如果没有提供标签，使用图片路径作为标签（用于无监督学习或测试）
-            self.labels = self.image_paths
-        else:
-            if len(labels) != len(self.image_paths):
-                raise ValueError(f"标签数量 ({len(labels)}) 与图片数量 ({len(self.image_paths)}) 不匹配")
-            self.labels = labels
-        
-        # 初始化 transform
-        if transform is None:
+
+    def __init__(
+        self,
+        render_root=r"S:\FFXIV_train_dataset",
+        real_root=r"S:\FFXIV_train_dataset2",
+        render_transform=None,
+        real_transform=None,
+        min_real_images=20,
+    ):
+        self.render_root = Path(render_root)
+        self.real_root = Path(real_root)
+        self.min_real_images = min_real_images
+
+        if render_transform is None:
             from .transforms import ClothingTransform
-            self.transform = ClothingTransform(train=is_train)
-        else:
-            self.transform = transform
-    
-    def _scan_images(self, folder_path):
-        """扫描文件夹中的所有图片文件"""
-        image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'}
-        image_paths = []
-        for root, dirs, files in os.walk(folder_path):
-            for file in files:
-                if os.path.splitext(file.lower())[1] in image_extensions:
-                    image_paths.append(os.path.join(root, file))
-        return sorted(image_paths)
-    
+
+            render_transform = ClothingTransform(train=True)
+        if real_transform is None:
+            from .transforms import RealClothingTransform
+
+            real_transform = RealClothingTransform(train=True)
+
+        self.render_transform = render_transform
+        self.real_transform = real_transform
+
+        self.allowed_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
+
+        self.render_map = self._scan_root(self.render_root)
+        self.real_map = {
+            cls: imgs for cls, imgs in self._scan_root(self.real_root).items()
+            if len(imgs) >= self.min_real_images
+        }
+
+        self.class_names = sorted(set(self.render_map.keys()) | set(self.real_map.keys()))
+        if len(self.class_names) == 0:
+            raise ValueError("No valid classes found in render or real datasets")
+        self.class_to_idx = {c: i for i, c in enumerate(self.class_names)}
+
+        self.class_weights = []
+        self.class_real_prob = {}
+        for cls in self.class_names:
+            render_count = len(self.render_map.get(cls, []))
+            real_count = len(self.real_map.get(cls, []))
+            self.class_real_prob[cls] = self._real_prob(real_count, render_count)
+            self.class_weights.append(max(render_count, real_count, 1))
+
+        self.samples_per_epoch = int(sum(self.class_weights))
+
+    def _scan_root(self, root_dir: Path):
+        if not root_dir.exists():
+            return {}
+        class_map = {}
+        for d in sorted([p for p in root_dir.iterdir() if p.is_dir()]):
+            imgs = [str(p) for p in d.iterdir() if p.suffix.lower() in self.allowed_exts]
+            if len(imgs) > 0:
+                class_map[d.name] = imgs
+        return class_map
+
+    def _real_prob(self, real_count: int, render_count: int):
+        if real_count == 0:
+            return 0.0
+        if render_count == 0:
+            return 1.0
+        if real_count >= 100:
+            return 0.5  # render:real ≈ 1:1
+        if real_count >= 50:
+            return 1.0 / 3.0  # render:real ≈ 2:1
+        return 0.25  # render:real ≈ 3:1 (20-49)
+
     def __len__(self):
-        return len(self.image_paths)
-    
+        return self.samples_per_epoch
+
+    def _sample_class(self):
+        return random.choices(self.class_names, weights=self.class_weights, k=1)[0]
+
+    def _pick_image(self, paths):
+        return random.choice(paths)
+
     def __getitem__(self, idx):
-        """
-        返回增强后的图片 tensor 和对应的标签
-        
-        Returns:
-            image: torch.Tensor, shape: (C, H, W)
-            label: 标签（可能是路径、类别ID等）
-        """
-        # 读取图片（使用支持中文路径的函数）
-        image_path = self.image_paths[idx]
-        image = imread_unicode(image_path)
-        
-        if image is None:
-            raise ValueError(f"无法读取图片: {image_path}")
-        
-        # 转换为 RGB（Albumentations 使用 RGB）
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        
-        # 应用 transform（返回 tensor）
-        image_tensor = self.transform(image)
-        
-        # 确保 tensor 是 float32 类型（ToTensorV2 应该已经转换，但为了安全起见再次确认）
-        if image_tensor.dtype != torch.float32:
-            image_tensor = image_tensor.float()
-        
-        # 获取标签
-        label = self.labels[idx]
-        
-        return image_tensor, label
-    
-    def get_image_path(self, idx):
-        """获取指定索引的图片路径"""
-        return self.image_paths[idx]
+        cls = self._sample_class()
+        render_list = self.render_map.get(cls, [])
+        real_list = self.real_map.get(cls, [])
 
+        use_real = False
+        if len(real_list) > 0:
+            p_real = self.class_real_prob.get(cls, 0.0)
+            if random.random() < p_real:
+                use_real = True
+            elif len(render_list) == 0:
+                use_real = True  # fallback if only real exists
 
-def create_dataloader(image_paths, labels=None, batch_size=32, shuffle=True, 
-                     num_workers=4, pin_memory=True, is_train=True, transform=None):
-    """
-    创建 DataLoader 的便捷函数
-    
-    Args:
-        image_paths: 图片路径（字符串、列表或文件夹路径）
-        labels: 标签列表
-        batch_size: 批次大小
-        shuffle: 是否打乱数据
-        num_workers: 数据加载的进程数
-        pin_memory: 是否将数据固定在内存中（GPU 训练时建议为 True）
-        is_train: 是否为训练模式
-        transform: 自定义 transform，如果为 None 则使用 ClothingTransform
-    
-    Returns:
-        DataLoader 实例
-    """
-    dataset = ClothingDataset(
-        image_paths=image_paths,
-        labels=labels,
-        transform=transform,
-        is_train=is_train
-    )
-    
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=shuffle,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-        drop_last=is_train  # 训练时丢弃最后一个不完整的 batch
-    )
-    
-    return dataloader
+        if use_real and len(real_list) > 0:
+            img_path = self._pick_image(real_list)
+            transform = self.real_transform
+        else:
+            if len(render_list) == 0:
+                raise ValueError(f"Class {cls} has no render or real images available")
+            img_path = self._pick_image(render_list)
+            transform = self.render_transform
 
+        img = imread_unicode(img_path)
+        if img is None:
+            raise ValueError(f"Failed to read image: {img_path}")
+
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        v1 = transform(img)
+        v2 = transform(img)
+
+        label = self.class_to_idx[cls]
+        return torch.stack([v1, v2], dim=0), img, label

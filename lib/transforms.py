@@ -2,7 +2,6 @@ import os
 import numpy as np
 import random
 import cv2
-from torch.utils.data import DataLoader
 from albumentations import *
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
@@ -13,57 +12,6 @@ def imread_unicode(image_path):
     img_array = np.fromfile(image_path, dtype=np.uint8)
     img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
     return img
-
-
-class ColorAgnosticTransform:
-    def __init__(self, train=True, img_size=224):
-        self.train = train
-        self.img_size = img_size
-
-        self.normalize = transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225]
-        )
-
-        self.to_tensor = transforms.ToTensor()
-
-    def random_grayscale(self, img):
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        gray = np.stack([gray, gray, gray], axis=-1)
-        return gray
-
-    def strong_hsv_jitter(self, img):
-        hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV).astype(np.float32)
-
-        hsv[..., 0] = (hsv[..., 0] + random.uniform(-30, 30)) % 180
-        hsv[..., 1] *= random.uniform(0.2, 1.8)
-        hsv[..., 2] *= random.uniform(0.5, 1.5)
-
-        hsv[..., 1:] = np.clip(hsv[..., 1:], 0, 255)
-        return cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB)
-
-    def channel_corrupt(self, img):
-        img = img.copy()
-        c = random.randint(0, 2)
-        img[..., c] = img[..., random.randint(0, 2)]
-        return img
-
-    def __call__(self, img):
-        if self.train:
-            p = random.random()
-
-            if p < 0.7:
-                img = self.random_grayscale(img)
-            elif p < 0.9:
-                img = self.strong_hsv_jitter(img)
-            else:
-                img = self.channel_corrupt(img)
-
-        img = cv2.resize(img, (self.img_size, self.img_size))
-        img = self.to_tensor(img)
-        img = self.normalize(img)
-
-        return img
 
 
 class StripeDropout(A.DualTransform):
@@ -169,13 +117,10 @@ class LargeWhiteHole(A.DualTransform):
             hole_w = random.randint(self.min_hole_size[0], self.max_hole_size[0])
             hole_h = random.randint(self.min_hole_size[1], self.max_hole_size[1])
             
-            # 确保孔洞在图像范围内
             x = random.randint(0, max(1, w - hole_w))
             y = random.randint(0, max(1, h - hole_h))
             
-            # 创建椭圆形或矩形孔洞（更自然）
             if random.random() < 0.5:
-                # 椭圆形孔洞
                 center_x = x + hole_w // 2
                 center_y = y + hole_h // 2
                 axes_x = hole_w // 2
@@ -183,7 +128,6 @@ class LargeWhiteHole(A.DualTransform):
                 cv2.ellipse(img, (center_x, center_y), (axes_x, axes_y), 0, 0, 360, 
                            (self.fill_value, self.fill_value, self.fill_value), -1)
             else:
-                # 矩形孔洞
                 img[y:y+hole_h, x:x+hole_w] = self.fill_value
         
         return img
@@ -271,7 +215,6 @@ class EdgePadding(A.DualTransform):
     def apply(self, img, **params):
         h, w = img.shape[:2]
         
-        # 随机选择要扩展的边（可以多边）
         pad_top = random.randint(self.padding_range[0], self.padding_range[1]) if random.random() < 0.5 else 0
         pad_bottom = random.randint(self.padding_range[0], self.padding_range[1]) if random.random() < 0.5 else 0
         pad_left = random.randint(self.padding_range[0], self.padding_range[1]) if random.random() < 0.5 else 0
@@ -280,40 +223,32 @@ class EdgePadding(A.DualTransform):
         if pad_top == 0 and pad_bottom == 0 and pad_left == 0 and pad_right == 0:
             return img
         
-        # 根据 fill_mode 填充
         if self.fill_mode == 'white':
             fill_value = 255
         elif self.fill_mode == 'random':
-            # 随机颜色（模拟其他部位）
             fill_value = (random.randint(200, 255), random.randint(200, 255), random.randint(200, 255))
         elif self.fill_mode == 'noise':
-            # 噪声填充
             fill_value = 'noise'
         elif self.fill_mode == 'mirror':
-            # 镜像填充
             fill_value = 'mirror'
         else:
             fill_value = 255
         
         if fill_value == 'noise':
-            # 噪声填充
             img = cv2.copyMakeBorder(
                 img, pad_top, pad_bottom, pad_left, pad_right,
                 cv2.BORDER_CONSTANT, value=(128, 128, 128)
             )
-            # 添加噪声
             noise = np.random.randint(0, 255, (pad_top + h + pad_bottom, pad_left + w + pad_right, 3), dtype=np.uint8)
             mask = np.zeros((pad_top + h + pad_bottom, pad_left + w + pad_right, 3), dtype=np.uint8)
             mask[pad_top:pad_top+h, pad_left:pad_left+w] = 255
             img = np.where(mask == 255, img, noise)
         elif fill_value == 'mirror':
-            # 镜像填充
             img = cv2.copyMakeBorder(
                 img, pad_top, pad_bottom, pad_left, pad_right,
                 cv2.BORDER_REFLECT_101
             )
         else:
-            # 常量填充
             img = cv2.copyMakeBorder(
                 img, pad_top, pad_bottom, pad_left, pad_right,
                 cv2.BORDER_CONSTANT, value=fill_value
@@ -329,10 +264,7 @@ class EdgePadding(A.DualTransform):
 
 
 class PatchTransform:
-    """
-    Patch专用的轻微增强transform
-    以轻微的颜色、灰度、饱和度和几何增强为主，可加入少量小遮挡
-    """
+    """Lightweight patch augmentation with mild color/geometry changes and small occlusions."""
     def __init__(self, return_tensor=True):
         base_transforms = [
             A.Affine(
@@ -522,7 +454,7 @@ class ClothingTransform:
                         fill_value=255,
                         p=1.0
                     ),
-                ], p=0.7),  # 提高概率，因为这是核心问题
+                ], p=0.7),
 
                 A.OneOf([
                     A.Sharpen(alpha=(0.2, 0.5), lightness=(0.7, 1.0), p=1.0),
@@ -569,78 +501,163 @@ class ClothingTransform:
         return self.transform(image=image)["image"]
 
 
-def preview_augmentations(image_path, grid_size=(5, 5), output_path=None, show=True, preview_patches=False, patch_size=224, num_patches_per_image=3):
+class RealClothingTransform:
+    """Light augmentation for real images: mild crop/flip and low-intensity color jitter."""
+    def __init__(self, train=True, return_tensor=True):
+        if train:
+            base_transforms = [
+                A.RandomResizedCrop(
+                    height=512, width=512,
+                    scale=(0.85, 1.0),
+                    ratio=(0.9, 1.1),
+                    p=1.0
+                ),
+                A.HorizontalFlip(p=0.5),
+                A.ShiftScaleRotate(
+                    shift_limit=0.02,
+                    scale_limit=0.05,
+                    rotate_limit=8,
+                    border_mode=cv2.BORDER_CONSTANT,
+                    value=255,
+                    p=0.4
+                ),
+                A.OneOf([
+                    A.ColorJitter(
+                        brightness=0.12,
+                        contrast=0.12,
+                        saturation=0.18,
+                        hue=0.03,
+                        p=1.0
+                    ),
+                    A.HueSaturationValue(
+                        hue_shift_limit=12,
+                        sat_shift_limit=(-18, 18),
+                        val_shift_limit=12,
+                        p=1.0
+                    ),
+                    A.RandomBrightnessContrast(
+                        brightness_limit=0.12,
+                        contrast_limit=0.12,
+                        p=1.0
+                    ),
+                ], p=0.7),
+                A.OneOf([
+                    A.GaussianBlur(blur_limit=(3, 5), p=1.0),
+                    A.MotionBlur(blur_limit=5, p=1.0),
+                    A.MedianBlur(blur_limit=3, p=1.0),
+                ], p=0.15),
+                A.ISONoise(
+                    color_shift=(0.01, 0.04),
+                    intensity=(0.05, 0.18),
+                    p=0.1
+                ),
+            ]
+        else:
+            base_transforms = [
+                A.Resize(512, 512),
+            ]
+
+        self.transform = A.Compose(
+            base_transforms + (
+                [
+                    A.Normalize(
+                        mean=(0.485, 0.456, 0.406),
+                        std=(0.229, 0.224, 0.225)
+                    ),
+                    ToTensorV2()
+                ] if return_tensor else []
+            )
+        )
+
+    def __call__(self, image):
+        return self.transform(image=image)["image"]
+
+
+def preview_augmentations(
+    image_path,
+    grid_size=(5, 5),
+    output_path=None,
+    show=True,
+    preview_patches=False,
+    patch_size=224,
+    num_patches_per_image=3,
+    use_real_transform=False,
+):
     """
-    预览数据增强效果
-    
+    Preview augmentations on a grid.
+
     Args:
-        image_path: 图片路径
-        grid_size: 网格大小 (rows, cols)
-        output_path: 输出路径
-        show: 是否显示
-        preview_patches: 是否预览patch（局部特征）
-        patch_size: patch大小
-        num_patches_per_image: 每张增强图像提取的patch数量
+        image_path: input image path
+        grid_size: (rows, cols) for the preview grid
+        output_path: optional save path
+        show: whether to display the grid
+        preview_patches: preview local patches instead of full images
+        patch_size: patch size when previewing patches
+        num_patches_per_image: number of patches to extract per augmented image
+        use_real_transform: switch to RealClothingTransform for real-image augment
     """
     image = imread_unicode(image_path)
     if image is None:
-        raise ValueError(f"无法读取图片: {image_path}")
-    
+        raise ValueError(f"Failed to read image: {image_path}")
+
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    transform = ClothingTransform(train=True, return_tensor=False)
+    if use_real_transform:
+        transform = RealClothingTransform(train=True, return_tensor=False)
+    else:
+        transform = ClothingTransform(train=True, return_tensor=False)
     patch_transform = PatchTransform(return_tensor=False)
-    
+
     rows, cols = grid_size
     num_images = rows * cols
-    
+
     if preview_patches:
         patch_images = []
-        
+
         H, W = image_rgb.shape[:2]
-        
+
         center_h = H / 2.0
         center_w = W / 2.0
-        
+
         patch_idx = 0
         while patch_idx < num_images:
             np.random.seed(patch_idx)
-            
+
             offset_h_ratio = np.random.uniform(-0.20, 0.20)
             offset_w_ratio = np.random.uniform(-0.1, 0.1)
-            
+
             offset_h = offset_h_ratio * H
             offset_w = offset_w_ratio * W
-            
+
             patch_center_h = center_h + offset_h
             patch_center_w = center_w + offset_w
-            
+
             top = int(patch_center_h - patch_size / 2.0)
             left = int(patch_center_w - patch_size / 2.0)
-            
+
             top = max(0, min(top, H - patch_size))
             left = max(0, min(left, W - patch_size))
-            
+
             patch = image_rgb[top:top+patch_size, left:left+patch_size]
-            
+
             if patch.shape[0] < patch_size or patch.shape[1] < patch_size:
                 patch = cv2.resize(patch, (patch_size, patch_size), interpolation=cv2.INTER_LINEAR)
-            
+
             np.random.seed(patch_idx)
             augmented_patch = patch_transform(patch)
-            
+
             patch_images.append(augmented_patch)
             patch_idx += 1
-        
+
         target_h, target_w = 256, 256
         resized_images = []
         for img in patch_images:
             resized = cv2.resize(img, (target_w, target_h))
             resized_images.append(resized)
-        
+
         grid_h = rows * target_h
         grid_w = cols * target_w
         grid_image = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
-        
+
         for idx, img in enumerate(resized_images):
             row = idx // cols
             col = idx % cols
@@ -649,26 +666,25 @@ def preview_augmentations(image_path, grid_size=(5, 5), output_path=None, show=T
             x_start = col * target_w
             x_end = x_start + target_w
             grid_image[y_start:y_end, x_start:x_end] = img
-        
-        title = f'Patch预览 ({rows}x{cols} 网格, patch_size={patch_size})'
+
+        title = f'Patch?? ({rows}x{cols} ??, patch_size={patch_size})'
     else:
-        # 原有逻辑：预览完整增强图像
         augmented_images = []
         for i in range(num_images):
             np.random.seed(i)
             augmented = transform(image_rgb)
             augmented_images.append(augmented)
-        
+
         target_h, target_w = 256, 256
         resized_images = []
         for img in augmented_images:
             resized = cv2.resize(img, (target_w, target_h))
             resized_images.append(resized)
-        
+
         grid_h = rows * target_h
         grid_w = cols * target_w
         grid_image = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
-        
+
         for idx, img in enumerate(resized_images):
             row = idx // cols
             col = idx % cols
@@ -677,15 +693,15 @@ def preview_augmentations(image_path, grid_size=(5, 5), output_path=None, show=T
             x_start = col * target_w
             x_end = x_start + target_w
             grid_image[y_start:y_end, x_start:x_end] = img
-        
-        title = f'数据增强预览 ({rows}x{cols} 网格)'
-    
+
+        title = f'Augmentation preview ({rows}x{cols} grid)'
+
     grid_image_bgr = cv2.cvtColor(grid_image, cv2.COLOR_RGB2BGR)
-    
+
     if output_path:
         cv2.imwrite(output_path, grid_image_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        print(f"预览图片已保存到: {output_path}")
-    
+        print(f"Preview saved to: {output_path}")
+
     if show:
         try:
             import matplotlib.pyplot as plt
@@ -696,33 +712,37 @@ def preview_augmentations(image_path, grid_size=(5, 5), output_path=None, show=T
             plt.tight_layout()
             plt.show()
         except ImportError:
-            print("matplotlib 未安装，无法显示图片。请安装: pip install matplotlib")
+            print("matplotlib is not installed; cannot display. Install with: pip install matplotlib")
             cv2.imshow('Augmentation Preview', grid_image_bgr)
-            print("按任意键关闭窗口...")
+            print("Press any key to close the window...")
             cv2.waitKey(0)
             cv2.destroyAllWindows()
-    
+
     return grid_image_bgr
+
 
 
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) < 2:
-        print("Usage: python transforms.py <image_path> [preview_patches]")
+        print("Usage: python transforms.py <image_path> [preview_patches] [use_real_transform]")
         print("  preview_patches: 'true' or 'false' (default: false)")
+        print("  use_real_transform: 'true' to use RealClothingTransform (default: false)")
         sys.exit(1)
-    
+
     image_path = sys.argv[1]
     preview_patches = sys.argv[2].lower() == 'true' if len(sys.argv) > 2 else False
-    
+    use_real_transform = sys.argv[3].lower() == 'true' if len(sys.argv) > 3 else False
+
     if os.path.exists(image_path):
         if preview_patches:
-            print("正在生成Patch预览...")
+            print("Generating patch preview...")
             output_path = "preview_patches.jpg"
         else:
-            print("正在生成数据增强预览...")
+            print("Generating augmentation preview...")
             output_path = "preview_augmentations.jpg"
-        
+
         preview_augmentations(
             image_path=image_path,
             grid_size=(5, 5),
@@ -730,5 +750,6 @@ if __name__ == "__main__":
             show=True,
             preview_patches=preview_patches,
             patch_size=224,
-            num_patches_per_image=3
+            num_patches_per_image=3,
+            use_real_transform=use_real_transform,
         )
