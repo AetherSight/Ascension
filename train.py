@@ -4,6 +4,8 @@ import cv2
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
+import logging
+from pathlib import Path
 
 from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
@@ -22,9 +24,26 @@ from lib import (
 from evaluate import evaluate_real_world_images
 
 
+def setup_logger(save_dir: str):
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    log_path = Path(save_dir) / "logs" / "debug.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_path, encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
+    )
+    logging.info(f"Logging to {log_path}")
+    return log_path
+
+
 def load_checkpoint(resume_path, model, optimizer, scheduler, warmup_epochs):
     """Load training checkpoint and resume epoch/optim/scheduler states."""
-    print(f"Loading checkpoint: {resume_path}")
+    logging.info(f"Loading checkpoint: {resume_path}")
     ckpt = torch.load(resume_path, map_location="cpu")
     model.load_state_dict(ckpt["model"], strict=False)
 
@@ -41,7 +60,7 @@ def load_checkpoint(resume_path, model, optimizer, scheduler, warmup_epochs):
             for _ in range(max(0, steps)):
                 scheduler.step()
 
-    print(f"Resumed from epoch {ckpt['epoch']} -> Start {start_epoch}")
+    logging.info(f"Resumed from epoch {ckpt['epoch']} -> Start {start_epoch}")
     return start_epoch, best_loss
 
 
@@ -112,15 +131,19 @@ def save_checkpoint(checkpoint, save_dir, epoch, best_loss):
     """Save checkpoints and track the best loss."""
     if checkpoint["loss"] < best_loss:
         best_loss = checkpoint["loss"]
-        torch.save(checkpoint, os.path.join(save_dir, "best_supcon.pth"))
+        best_path = os.path.join(save_dir, "best_supcon.pth")
+        torch.save(checkpoint, best_path)
+        logging.info(f"New best loss {best_loss:.4f} at epoch {epoch}, saved to {best_path}")
 
-    torch.save(checkpoint, os.path.join(save_dir, f"epoch_{epoch}_supcon.pth"))
+    latest_path = os.path.join(save_dir, f"epoch_{epoch}_supcon.pth")
+    torch.save(checkpoint, latest_path)
+    logging.info(f"Saved checkpoint to {latest_path}")
     return best_loss
 
 
 def run_evaluation(model, eval_gallery_root, eval_image_paths, device, eval_top_k, save_dir, epoch):
     """Run evaluation against a gallery."""
-    print(f"\n{'='*40}\nEvaluating Epoch {epoch}\n{'='*40}")
+    logging.info(f"Evaluating Epoch {epoch}")
 
     torch.cuda.empty_cache()
 
@@ -161,10 +184,12 @@ def train(
     lr: float = 3e-4,
     save_dir: str = "checkpoints",
     resume_path: str | None = None,
-    eval_gallery_root: str | None = None,
+    eval_gallery_root: str | list[str] | None = None,
     eval_image_paths: list[str] | None = None,
     eval_top_k: int = 5,
+    max_classes: int | None = None,
 ):
+    setup_logger(save_dir)
     # --- Config ---
     config = {
         "model_name": "tf_efficientnetv2_m",
@@ -186,6 +211,7 @@ def train(
         real_root=real_root,
         render_transform=ClothingTransform(train=True),
         real_transform=RealClothingTransform(train=True),
+        max_classes=max_classes,
     )
 
     train_loader = DataLoader(
@@ -219,13 +245,16 @@ def train(
     if resume_path is not None:
         start_epoch, best_loss = load_checkpoint(resume_path, model, optimizer, main_scheduler, warmup_epochs)
 
-    print(f"Phys Batch: {batch_size} | Acc Steps: {accumulation_steps} | Eff Batch: {batch_size * accumulation_steps}")
+    logging.info(
+        f"Phys Batch: {batch_size} | Acc Steps: {accumulation_steps} | Eff Batch: {batch_size * accumulation_steps}"
+    )
 
     for epoch in range(start_epoch, epochs + 1):
         if epoch <= warmup_epochs:
             curr_lr = lr * (epoch / warmup_epochs)
             for pg in optimizer.param_groups:
                 pg["lr"] = curr_lr
+        logging.info(f"Epoch {epoch}/{epochs} start, lr={optimizer.param_groups[0]['lr']:.2e}")
 
         model.train()
         total_loss = 0.0
@@ -293,11 +322,20 @@ def train(
             }
 
             pbar.set_postfix(pbar_dict)
+            if (i + 1) % (accumulation_steps * 10) == 0:
+                logging.debug(
+                    f"Step {i+1}: loss={current_loss_val:.4f}, partial={last_partial_loss:.4f}, "
+                    f"lr={optimizer.param_groups[0]['lr']:.2e}"
+                )
 
         if epoch > warmup_epochs:
             main_scheduler.step()
 
         avg_loss = total_loss / len(train_loader)
+        logging.info(
+            f"Epoch {epoch}: avg_loss={avg_loss:.4f}, best_loss={best_loss:.4f}, "
+            f"last_partial_loss={last_partial_loss:.4f}"
+        )
 
         checkpoint = {
             "model": model.state_dict(),
@@ -311,6 +349,7 @@ def train(
         best_loss = save_checkpoint(checkpoint, save_dir, epoch, best_loss)
 
         if eval_gallery_root and eval_image_paths:
+            logging.info("Starting evaluation...")
             run_evaluation(model, eval_gallery_root, eval_image_paths, device, eval_top_k, save_dir, epoch)
 
     print("SupCon Training Finished")
@@ -320,11 +359,12 @@ if __name__ == "__main__":
     train(
         render_root="S:\\FFXIV_train_dataset",
         real_root="S:\\FFXIV_train_dataset2",
-        batch_size=12,
-        target_batch=96,
-        epochs=70,
-        warmup_epochs=5,
+        batch_size=8,
+        target_batch=64,
+        epochs=5,
+        warmup_epochs=1,
         lr=3e-4,
-        save_dir="checkpoints_0.0.3",
-        resume_path="checkpoints_0.0.3/epoch_30_supcon.pth",
+        save_dir="checkpoints_smoke",
+        resume_path=None,
+        max_classes=50,
     )

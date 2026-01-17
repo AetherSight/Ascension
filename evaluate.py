@@ -1,4 +1,5 @@
 import os
+import logging
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -30,7 +31,7 @@ def build_gallery(
         gallery_roots = [gallery_roots]
 
     if cache_path and os.path.exists(cache_path):
-        print(f"[Gallery] Loading cache from {cache_path}")
+        logging.info(f"[Gallery] Loading cache from {cache_path}")
         data = torch.load(cache_path, map_location="cpu")
         return data["embs"], data["labels"]
 
@@ -50,7 +51,7 @@ def build_gallery(
                     image_paths.append(os.path.join(cls_dir, name))
                     image_labels.append(cls)
 
-    print(f"[Gallery] Total images: {len(image_paths)}")
+    logging.info(f"[Gallery] Total images: {len(image_paths)} from roots: {gallery_roots}")
 
     dataset = GalleryDataset(
         image_paths=image_paths,
@@ -90,7 +91,7 @@ def build_gallery(
             },
             cache_path
         )
-        print(f"[Gallery] Cache saved to {cache_path}")
+        logging.info(f"[Gallery] Cache saved to {cache_path}")
 
     return gallery_embs, gallery_labels_out
 
@@ -373,6 +374,8 @@ def verify_real_world_image(
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+
     test_images = [
         r"S:\FFXIV_train_test\4_2.JPG",
         r"S:\FFXIV_train_test\a.JPG",
