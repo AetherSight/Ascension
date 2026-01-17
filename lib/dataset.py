@@ -1,5 +1,6 @@
 import os
 import random
+import logging
 from pathlib import Path
 
 import cv2
@@ -48,7 +49,8 @@ class MixedSupConClothingDataset(Dataset):
         real_root=r"S:\FFXIV_train_dataset2",
         render_transform=None,
         real_transform=None,
-        min_real_images=20,
+        min_real_images=0,
+        max_classes=None,
     ):
         self.render_root = Path(render_root)
         self.real_root = Path(real_root)
@@ -75,6 +77,11 @@ class MixedSupConClothingDataset(Dataset):
         }
 
         self.class_names = sorted(set(self.render_map.keys()) | set(self.real_map.keys()))
+        if max_classes is not None:
+            self.class_names = self.class_names[:max_classes]
+            # trim maps to selected classes
+            self.render_map = {cls: imgs for cls, imgs in self.render_map.items() if cls in self.class_names}
+            self.real_map = {cls: imgs for cls, imgs in self.real_map.items() if cls in self.class_names}
         if len(self.class_names) == 0:
             raise ValueError("No valid classes found in render or real datasets")
         self.class_to_idx = {c: i for i, c in enumerate(self.class_names)}
@@ -87,7 +94,16 @@ class MixedSupConClothingDataset(Dataset):
             self.class_real_prob[cls] = self._real_prob(real_count, render_count)
             self.class_weights.append(max(render_count, real_count, 1))
 
-        self.samples_per_epoch = int(sum(self.class_weights))
+        self.sampled_classes = self._build_sampled_classes()
+        self.samples_per_epoch = len(self.sampled_classes)
+        render_only = sum(1 for c in self.class_names if c in self.render_map and c not in self.real_map)
+        real_only = sum(1 for c in self.class_names if c in self.real_map and c not in self.render_map)
+        both = len(self.class_names) - render_only - real_only
+        logging.info(
+            f"MixedSupConClothingDataset: classes={len(self.class_names)} (render_only={render_only}, "
+            f"real_only={real_only}, both={both}), min_real_images={self.min_real_images}, "
+            f"max_classes={max_classes}"
+        )
 
     def _scan_root(self, root_dir: Path):
         if not root_dir.exists():
@@ -104,23 +120,31 @@ class MixedSupConClothingDataset(Dataset):
             return 0.0
         if render_count == 0:
             return 1.0
+        if real_count < 20:
+            return 0.05  # rare real images: show occasionally
         if real_count >= 100:
-            return 0.5  # render:real ≈ 1:1
+            return 0.6  # favor real images when abundant
         if real_count >= 50:
-            return 1.0 / 3.0  # render:real ≈ 2:1
-        return 0.25  # render:real ≈ 3:1 (20-49)
+            return 1.0 / 3.0  # render:real ~ 2:1
+        return 0.25  # render:real ~ 3:1 (20-49)
 
     def __len__(self):
-        return self.samples_per_epoch
+        return len(self.sampled_classes)
 
-    def _sample_class(self):
-        return random.choices(self.class_names, weights=self.class_weights, k=1)[0]
+    def _build_sampled_classes(self):
+        sampled_classes = []
+        for cls, weight in zip(self.class_names, self.class_weights):
+            repeat = int(weight)
+            if repeat > 0:
+                sampled_classes.extend([cls] * repeat)
+        random.shuffle(sampled_classes)
+        return sampled_classes
 
     def _pick_image(self, paths):
         return random.choice(paths)
 
     def __getitem__(self, idx):
-        cls = self._sample_class()
+        cls = self.sampled_classes[idx]
         render_list = self.render_map.get(cls, [])
         real_list = self.real_map.get(cls, [])
 
